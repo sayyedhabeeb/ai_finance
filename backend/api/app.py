@@ -6,7 +6,6 @@ Prometheus metrics, and all API routers.
 """
 
 import logging
-import os
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
@@ -24,6 +23,7 @@ from backend.api.routes.risk import router as risk_router
 from backend.api.routes.memory import router as memory_router
 from backend.api.routes.health import router as health_router
 from backend.api.websockets.stream import router as ws_router
+from backend.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +124,8 @@ def _generate_request_id() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan — startup & shutdown hooks."""
-    logger.info("AI Financial Brain API starting up …")
+    logger.info("AI Financial Brain API starting up ...")
+    settings = get_settings()
 
     # --- Startup ---
     from backend.database.connection import DatabaseManager  # noqa: delayed import
@@ -136,9 +137,8 @@ async def lifespan(app: FastAPI):
 
     try:
         import redis.asyncio as aioredis
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         app.state.redis = aioredis.from_url(
-            redis_url,
+            settings.redis_url,
             encoding="utf-8",
             decode_responses=True,
             max_connections=20,
@@ -151,8 +151,7 @@ async def lifespan(app: FastAPI):
 
     try:
         import weaviate
-        weaviate_url = os.getenv("WEAVIATE_URL", "http://localhost:8080")
-        app.state.weaviate = weaviate.Client(weaviate_url)
+        app.state.weaviate = weaviate.Client(settings.weaviate_url)
         app.state.weaviate.is_ready()
         logger.info("Weaviate connection established")
     except Exception:

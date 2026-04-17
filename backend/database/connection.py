@@ -7,12 +7,13 @@ and transaction support. Designed for use as a singleton attached to
 """
 
 import logging
-import os
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import asyncpg
+
+from backend.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +21,7 @@ logger = logging.getLogger(__name__)
 # Default configuration (overridable via environment variables)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_DSN = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/ai_financial_brain",
-)
+_DEFAULT_DSN = get_settings().database_url
 
 
 class DatabaseManager:

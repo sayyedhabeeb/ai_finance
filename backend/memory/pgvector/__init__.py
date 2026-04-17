@@ -6,7 +6,7 @@ importance scoring, tag-based retrieval, and automatic consolidation
 of semantically-duplicate entries.
 """
 
-from .semantic_memory import (
+from backend.memory.pgvector.semantic_memory import (
     SemanticMemoryStore,
     MemoryEntry,
     _generate_embedding,

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from config.schemas import QualityRubric
+from backend.config.schemas import QualityRubric
 
 
 # ============================================================
@@ -370,3 +370,4 @@ overall assessment and actionable feedback.
 ```
 """
     return prompt
+

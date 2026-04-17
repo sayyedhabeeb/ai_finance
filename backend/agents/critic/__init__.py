@@ -1,6 +1,6 @@
 """Critic Agent — quality evaluation and scoring."""
-from agents.critic.agent import CriticAgent
-from agents.critic.quality_rubric import (
+from backend.agents.critic.agent import CriticAgent
+from backend.agents.critic.quality_rubric import (
     ACCURACY_RUBRIC,
     ACTIONABILITY_RUBRIC,
     COHERENCE_RUBRIC,
@@ -30,3 +30,4 @@ __all__ = [
     "build_revision_prompt",
     "build_overall_evaluation_prompt",
 ]
+

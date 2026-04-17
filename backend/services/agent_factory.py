@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import importlib
-import os
 import threading
 from typing import Any
 
@@ -10,8 +9,8 @@ import structlog
 from langchain_core.language_models import BaseChatModel
 from langchain_groq import ChatGroq
 
-from agents.base import BaseAgent
-from config.schemas import AgentType
+from backend.agents.base import BaseAgent
+from backend.config.schemas import AgentType
 
 logger = structlog.get_logger(__name__)
 
@@ -132,9 +131,7 @@ def _resolve_agent_type(agent_type: str) -> AgentType:
 
 def _build_llm_from_settings(settings: Any) -> BaseChatModel | None:
     """Instantiate a LangChain LLM from application settings using Groq only."""
-    provider = str(
-        getattr(settings, "llm_provider", os.getenv("LLM_PROVIDER", "groq"))
-    ).lower().strip()
+    provider = str(settings.llm_provider).lower().strip()
 
     if provider != "groq":
         raise ValueError(
@@ -142,15 +139,16 @@ def _build_llm_from_settings(settings: Any) -> BaseChatModel | None:
             "This project is configured for Groq only. Set LLM_PROVIDER=groq."
         )
 
-    groq_key = getattr(settings, "groq_api_key", os.getenv("GROQ_API_KEY", ""))
+    groq_key = settings.groq_api_key or ""
     if hasattr(groq_key, "get_secret_value"):
         groq_key = groq_key.get_secret_value()
 
     if groq_key:
         return ChatGroq(
-            api_key=os.getenv("GROQ_API_KEY"),
-            model="llama3-70b-8192",
+            api_key=groq_key,
+            model=settings.groq_model,
         )
 
     logger.warning("agent_factory.no_llm_available - agents will use heuristic mode")
     return None
+

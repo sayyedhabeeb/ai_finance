@@ -9,12 +9,14 @@ import hashlib
 import hmac
 import json
 import logging
-import os
+
 import time
 from typing import Callable, Dict, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from backend.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +25,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # In production these come from env / Vault — hardcoded here for clarity
-JWT_SECRET = os.getenv("JWT_SECRET_KEY", "CHANGE_ME_IN_PRODUCTION_USE_ENV_VAR")
-JWT_ALGORITHM = "HS256"
+settings = get_settings()
+JWT_SECRET = settings.jwt_secret_key
+JWT_ALGORITHM = settings.jwt_algorithm
 API_KEY_HEADER = "X-API-Key"
 
 # Rate limiter defaults
@@ -208,3 +211,5 @@ def require_role(*roles: str) -> Callable:
         return user
 
     return role_checker
+
+

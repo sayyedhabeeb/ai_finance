@@ -16,15 +16,15 @@ from typing import Any, Optional
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agents.base import BaseAgent
-from agents.market_analyst.tools import (
+from backend.agents.base import BaseAgent
+from backend.agents.market_analyst.tools import (
     MARKET_ANALYST_TOOLS,
     earnings_analyzer,
     price_analyzer,
     sector_comparator,
     technical_indicator_calculator,
 )
-from config.schemas import (
+from backend.config.schemas import (
     AgentResult,
     AgentTask,
     AgentType,
@@ -513,3 +513,4 @@ MACD bearish crossover, declining margins.
             confidence += 0.05
 
         return max(0.0, min(confidence, 1.0))
+

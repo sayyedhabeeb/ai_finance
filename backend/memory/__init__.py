@@ -20,11 +20,11 @@ the AI Financial Brain:
   into a single, easy-to-use interface.
 """
 
-from .memory_manager import MemoryManager
-from .redis.session_memory import RedisSessionMemory, ConversationContext, Message
-from .pgvector.semantic_memory import SemanticMemoryStore, MemoryEntry as SemanticMemoryEntry
-from .mem0.long_term_memory import Mem0LongTermMemory
-from .episodic.episodic_memory import EpisodicMemoryStore, MemoryEntry as EpisodicMemoryEntry
+from backend.memory.memory_manager import MemoryManager
+from backend.memory.redis.session_memory import RedisSessionMemory, ConversationContext, Message
+from backend.memory.pgvector.semantic_memory import SemanticMemoryStore, MemoryEntry as SemanticMemoryEntry
+from backend.memory.mem0.long_term_memory import Mem0LongTermMemory
+from backend.memory.episodic.episodic_memory import EpisodicMemoryStore, MemoryEntry as EpisodicMemoryEntry
 
 __all__ = [
     # Unified

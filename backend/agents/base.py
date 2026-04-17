@@ -18,7 +18,6 @@ from __future__ import annotations
 import abc
 import functools
 import json
-import os
 import re
 import time
 import traceback
@@ -36,7 +35,8 @@ from tenacity import (
     wait_exponential,
 )
 
-from config.schemas import (
+from backend.config.settings import get_settings
+from backend.config.schemas import (
     AgentResult,
     AgentTask,
     AgentType,
@@ -107,9 +107,10 @@ class BaseAgent(abc.ABC):
         **kwargs:
             Forwarded to subclasses.
         """
-        selected_provider = os.getenv("LLM_PROVIDER", provider or "groq").lower().strip()
-        self._groq_api_key: Optional[str] = groq_api_key or os.getenv("GROQ_API_KEY")
-        self._llm_model: str = groq_model or os.getenv("GROQ_MODEL", "llama3-70b-8192")
+        settings = get_settings()
+        selected_provider = str(settings.llm_provider or provider or "groq").lower().strip()
+        self._groq_api_key: Optional[str] = groq_api_key or settings.groq_api_key
+        self._llm_model: str = groq_model or settings.groq_model
         self._groq_temperature: float = groq_temperature
         self._provider: str = selected_provider
         self._verbose: bool = verbose
@@ -197,8 +198,8 @@ class BaseAgent(abc.ABC):
             raise ValueError("GROQ_API_KEY is required when LLM_PROVIDER=groq.")
 
         return ChatGroq(
-            api_key=os.getenv("GROQ_API_KEY"),
-            model="llama3-70b-8192",
+            api_key=self._groq_api_key,
+            model=self._llm_model,
         )
 
     # ------------------------------------------------------------------
@@ -587,3 +588,4 @@ class BaseAgent(abc.ABC):
                         lines.append(f"- {key}: {value}")
             lines.append("")
         return "\n".join(lines)
+

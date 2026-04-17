@@ -14,10 +14,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .redis.session_memory import RedisSessionMemory, ConversationContext
-from .pgvector.semantic_memory import SemanticMemoryStore, MemoryEntry as SemanticMemoryEntry
-from .mem0.long_term_memory import Mem0LongTermMemory
-from .episodic.episodic_memory import EpisodicMemoryStore, MemoryEntry as EpisodicMemoryEntry
+from backend.memory.redis.session_memory import RedisSessionMemory, ConversationContext
+from backend.memory.pgvector.semantic_memory import SemanticMemoryStore, MemoryEntry as SemanticMemoryEntry
+from backend.memory.mem0.long_term_memory import Mem0LongTermMemory
+from backend.memory.episodic.episodic_memory import EpisodicMemoryStore, MemoryEntry as EpisodicMemoryEntry
 
 logger = logging.getLogger(__name__)
 

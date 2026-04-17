@@ -17,8 +17,8 @@ from typing import Any, Optional
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agents.base import BaseAgent
-from agents.critic.quality_rubric import (
+from backend.agents.base import BaseAgent
+from backend.agents.critic.quality_rubric import (
     DIMENSION_NAMES,
     QUALITY_RUBRICS,
     RUBRIC_BY_DIMENSION,
@@ -26,7 +26,7 @@ from agents.critic.quality_rubric import (
     build_overall_evaluation_prompt,
     build_revision_prompt,
 )
-from config.schemas import (
+from backend.config.schemas import (
     AgentResult,
     AgentTask,
     AgentType,
@@ -585,3 +585,4 @@ to show to a user without revision. A score of 0.90+ represents "excellent quali
         except Exception:
             # MLflow logging is best-effort — never fail the critic for this
             pass
+

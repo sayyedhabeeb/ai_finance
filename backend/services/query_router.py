@@ -9,7 +9,7 @@ import structlog
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 
-from config.schemas import QueryType
+from backend.config.schemas import QueryType
 
 logger = structlog.get_logger(__name__)
 
@@ -287,3 +287,4 @@ class QueryRouter:
             if any(kw in q_lower for kw in keywords):
                 found.append(sector)
         return found
+

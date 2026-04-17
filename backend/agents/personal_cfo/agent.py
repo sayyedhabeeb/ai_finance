@@ -20,15 +20,15 @@ from typing import Any, Optional
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agents.base import BaseAgent
-from agents.personal_cfo.tools import (
+from backend.agents.base import BaseAgent
+from backend.agents.personal_cfo.tools import (
     PERSONAL_CFO_TOOLS,
     budget_calculator,
     goal_planner,
     insurance_analyzer,
     tax_estimator,
 )
-from config.schemas import (
+from backend.config.schemas import (
     AgentResult,
     AgentTask,
     AgentType,
@@ -503,3 +503,4 @@ Standard deduction: ₹50K. Various deductions available.
             confidence -= 0.10
 
         return max(0.0, min(confidence, 1.0))
+

@@ -6,23 +6,23 @@ streaming-compatible endpoints, and async query status polling.
 """
 
 import logging
-import os
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from langchain_groq import ChatGroq
-from openai import AsyncOpenAI
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field, confloat
+from starlette.concurrency import run_in_threadpool
 
-from backend.api.middleware.auth import get_current_user
-from backend.config.settings import get_settings
+from backend.config.schemas import AgentTask, AgentType
+from backend.services.agent_factory import AgentFactory
+from backend.services.llm_service import generate_response
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
+_agent_factory = AgentFactory()
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +47,19 @@ class UserQuery(BaseModel):
                 "stream": False,
             }
         }
+
+
+class QueryRequest(BaseModel):
+    """Inbound query payload for /query endpoint."""
+    query: str = Field(..., min_length=1, max_length=10_000)
+
+
+class QueryResponse(BaseModel):
+    """Response payload for /query endpoint."""
+    query: Optional[str] = None
+    response: Optional[str] = None
+    status: str
+    message: Optional[str] = None
 
 
 class StreamChunk(BaseModel):
@@ -151,77 +164,91 @@ def _retrieve_context_chunks(request: Request, query_text: str, limit: int = 3) 
     return chunks[:limit]
 
 
-async def _run_groq_completion(system_prompt: str, user_prompt: str) -> tuple[str, str]:
-    settings = get_settings()
-    api_key = getattr(settings, "groq_api_key", "") or os.getenv("GROQ_API_KEY", "")
-    model = os.getenv("GROQ_MODEL", "llama3-70b-8192")
-    if not api_key:
-        raise ValueError("GROQ_API_KEY is not configured")
-
-    llm = ChatGroq(api_key=api_key, model=model, temperature=0.1)
-    response = await llm.ainvoke(f"System:\n{system_prompt}\n\nUser:\n{user_prompt}")
-    return str(response.content).strip(), model
+async def _run_llm_response(user_query: str) -> tuple[str, str]:
+    answer = await run_in_threadpool(generate_response, user_query)
+    return answer, "llama3-8b-8192"
 
 
-async def _run_openai_completion(system_prompt: str, user_prompt: str) -> tuple[str, str]:
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY is not configured")
+def _route_agent_type(user_query: str) -> AgentType | None:
+    lowered = user_query.lower()
+    if "portfolio" in lowered:
+        return AgentType.PORTFOLIO_MANAGER
+    if "risk" in lowered:
+        return AgentType.RISK_ANALYST
+    if "market" in lowered:
+        return AgentType.MARKET_ANALYST
+    return None
 
-    client = AsyncOpenAI(api_key=api_key)
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.1,
+
+async def _run_agent_completion(agent_type: AgentType, user_query: str) -> tuple[str, str]:
+    agent = _agent_factory.create_agent(agent_type)
+    task = AgentTask(
+        agent_type=agent_type,
+        query=user_query,
+        context={},
     )
-    content = response.choices[0].message.content or ""
-    return content.strip(), model
+    result = await agent.execute(task)
+    output = result.output
+    if isinstance(output, dict):
+        answer = (
+            output.get("response")
+            or output.get("answer")
+            or output.get("summary")
+            or output.get("output")
+            or str(output)
+        )
+    else:
+        answer = str(output)
+    return answer.strip(), agent_type.value
 
 
-async def _dispatch_to_agent(query: UserQuery, query_id: str, redis_client, request: Request) -> Dict[str, Any]:
-    """Dispatch a user query to configured LLM with optional retrieval context."""
+async def _dispatch_to_agent(query_text: str, query_id: str, redis_client, request: Request) -> Dict[str, Any]:
+    """Dispatch a user query to keyword-routed agent, with Groq fallback."""
     import json
 
-    settings = get_settings()
-    provider = str(getattr(settings, "llm_provider", os.getenv("LLM_PROVIDER", "groq"))).lower().strip()
+    user_query = query_text
 
-    context_chunks = _retrieve_context_chunks(request, query.query)
-    system_prompt = (
-        "You are an AI financial assistant. Provide accurate, concise, practical guidance. "
-        "If assumptions are made, state them briefly."
-    )
-    user_prompt = query.query
+    routed_agent = _route_agent_type(user_query)
+    answer = ""
+    model_name = ""
+    path = "llm"
 
-    if context_chunks:
-        context_blob = "\n\n".join(f"- {chunk}" for chunk in context_chunks)
-        user_prompt = (
-            f"{query.query}\n\nRelevant retrieved context:\n{context_blob}\n\n"
-            "Use the context when relevant, but do not fabricate facts."
-        )
+    if routed_agent is not None:
+        try:
+            answer, model_name = await _run_agent_completion(routed_agent, user_query)
+            path = f"agent:{routed_agent.value}"
+            logger.info("Query routed to agent path=%s query_id=%s", path, query_id)
+        except Exception:
+            logger.exception(
+                "Agent execution failed; falling back to LLM path=agent:%s query_id=%s",
+                routed_agent.value,
+                query_id,
+            )
 
-    if provider == "groq":
-        answer, model_name = await _run_groq_completion(system_prompt, user_prompt)
-    elif provider == "openai":
-        answer, model_name = await _run_openai_completion(system_prompt, user_prompt)
-    else:
-        raise ValueError(f"Unsupported LLM_PROVIDER='{provider}'")
+    if not answer:
+        context_chunks = _retrieve_context_chunks(request, user_query)
+        prompt_query = user_query
+        if context_chunks:
+            context_blob = "\n\n".join(f"- {chunk}" for chunk in context_chunks)
+            prompt_query = (
+                f"{user_query}\n\nRelevant retrieved context:\n{context_blob}\n\n"
+                "Use the context when relevant, but do not fabricate facts."
+            )
+        answer, model_name = await _run_llm_response(prompt_query)
+        path = "llm:groq"
+        logger.info("Query routed to LLM path=%s query_id=%s", path, query_id)
 
     result = {
         "status": "success",
         "answer": answer,
         "data": {
             "detected_intent": "financial_query",
-            "provider": provider,
+            "provider": "groq",
             "model": model_name,
-            "context_chunks": len(context_chunks),
+            "path": path,
         },
-        "confidence": 0.8,
-        "sources": ["llm", *(["weaviate"] if context_chunks else [])],
-        "agent_type": "llm_assistant",
+        "sources": ["agent" if path.startswith("agent:") else "llm"],
+        "agent_type": routed_agent.value if routed_agent and path.startswith("agent:") else "llm_assistant",
     }
 
     if redis_client is not None:
@@ -237,71 +264,45 @@ async def _dispatch_to_agent(query: UserQuery, query_id: str, redis_client, requ
 
 @router.post(
     "/query",
-    response_model=SystemResponse,
+    response_model=QueryResponse,
     status_code=status.HTTP_200_OK,
     summary="Submit a query to the AI Financial Brain",
     description="Accepts a natural-language financial query and returns a structured response.",
 )
 async def post_query(
-    body: UserQuery,
+    body: QueryRequest,
     request: Request,
-    background_tasks: BackgroundTasks,
-    current_user: Dict[str, Any] = Depends(get_current_user),
-) -> SystemResponse:
+) -> QueryResponse:
     query_id = f"q_{uuid.uuid4()}"
-    start = time.perf_counter()
-    user_id = current_user.get("user_id") or body.user_id
+    user_query = body.query
 
     redis_client = getattr(request.app.state, "redis", None)
-    logger.info("Received query request query_id=%s user_id=%s", query_id, user_id)
-
-    _store_query(query_id, {"user_id": user_id, "query": body.query})
+    logger.info("Received query request query_id=%s query=%s", query_id, user_query[:120])
+    _store_query(query_id, {"query": user_query})
 
     try:
-        result = await _dispatch_to_agent(body, query_id, redis_client, request)
+        result = await _dispatch_to_agent(user_query, query_id, redis_client, request)
     except Exception as exc:
         logger.exception("Agent dispatch failed for query %s", query_id)
-        _complete_query(query_id, {"status": "failed", "error": str(exc)})
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Agent pipeline error: {exc}",
+        _complete_query(query_id, {"status": "error", "error": str(exc)})
+        return QueryResponse(
+            query=user_query,
+            response=None,
+            status="error",
+            message=str(exc),
         )
 
-    latency_ms = (time.perf_counter() - start) * 1000
     _complete_query(query_id, result)
-
-    db = getattr(request.app.state, "db", None)
-    if db is not None:
-        try:
-            import json
-
-            await db.execute(
-                """
-                INSERT INTO agent_executions (id, user_id, query_id, agent_type, input_data, output, latency_ms)
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7)
-                """,
-                uuid.uuid4(),
-                user_id,
-                query_id,
-                result.get("agent_type", "unknown"),
-                json.dumps({"query": body.query, "context": body.context}),
-                json.dumps(result),
-                latency_ms,
-            )
-        except Exception:
-            logger.warning("Failed to log agent execution to DB", exc_info=True)
-
-    logger.info("Completed query request query_id=%s status=%s", query_id, result["status"])
-
-    return SystemResponse(
-        query_id=query_id,
-        status=result["status"],
-        answer=result.get("answer"),
-        data=result.get("data"),
-        confidence=result.get("confidence"),
-        sources=result.get("sources"),
-        agent_type=result.get("agent_type"),
-        latency_ms=round(latency_ms, 2),
+    logger.info(
+        "Completed query request query_id=%s status=success response=%s",
+        query_id,
+        result.get("answer", "")[:200],
+    )
+    return QueryResponse(
+        query=user_query,
+        response=result.get("answer", ""),
+        status="success",
+        message=None,
     )
 
 

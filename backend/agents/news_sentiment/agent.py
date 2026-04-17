@@ -17,8 +17,8 @@ from typing import Any, Optional
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agents.base import BaseAgent
-from agents.news_sentiment.tools import (
+from backend.agents.base import BaseAgent
+from backend.agents.news_sentiment.tools import (
     NEWS_SENTIMENT_TOOLS,
     _keyword_sentiment,
     event_impact_analyzer,
@@ -26,7 +26,7 @@ from agents.news_sentiment.tools import (
     sentiment_scorer,
     trend_extractor,
 )
-from config.schemas import (
+from backend.config.schemas import (
     AgentResult,
     AgentTask,
     AgentType,
@@ -533,3 +533,4 @@ regulatory crackdowns, accounting irregularities.
             confidence -= 0.10
 
         return max(0.0, min(confidence, 1.0))
+

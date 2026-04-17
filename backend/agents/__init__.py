@@ -11,17 +11,17 @@ Usage::
 
 from __future__ import annotations
 
-from config.schemas import AgentType
+from backend.config.schemas import AgentType
 
-from agents.personal_cfo import PersonalCFOAgent
-from agents.market_analyst import MarketAnalystAgent
-from agents.news_sentiment import NewsSentimentAgent
-from agents.risk_analyst import RiskAnalystAgent
-from agents.portfolio_manager import PortfolioManagerAgent
-from agents.critic import CriticAgent
+from backend.agents.personal_cfo import PersonalCFOAgent
+from backend.agents.market_analyst import MarketAnalystAgent
+from backend.agents.news_sentiment import NewsSentimentAgent
+from backend.agents.risk_analyst import RiskAnalystAgent
+from backend.agents.portfolio_manager import PortfolioManagerAgent
+from backend.agents.critic import CriticAgent
 
 # Import the base class for subclasses
-from agents.base import BaseAgent
+from backend.agents.base import BaseAgent
 
 __all__ = [
     "BaseAgent",
@@ -93,3 +93,4 @@ def create_agent(
     """
     agent_cls = get_agent_class(agent_type)
     return agent_cls(**kwargs)
+

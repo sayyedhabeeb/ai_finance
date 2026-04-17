@@ -47,12 +47,12 @@ else:
     # At runtime we don't need the type; just use Any for the annotation.
     CompiledGraph: type = None  # type: ignore[assignment,misc]
 
-from agents.base import BaseAgent
-from config.schemas import AgentResult, AgentTask, AgentType, QueryType
-from services.agent_factory import AgentFactory
-from services.graph_state import GraphState
-from services.query_router import QueryRouter
-from services.synthesizer import ResponseSynthesizer
+from backend.agents.base import BaseAgent
+from backend.config.schemas import AgentResult, AgentTask, AgentType, QueryType
+from backend.services.agent_factory import AgentFactory
+from backend.services.graph_state import GraphState
+from backend.services.query_router import QueryRouter
+from backend.services.synthesizer import ResponseSynthesizer
 
 logger = structlog.get_logger(__name__)
 
@@ -1005,3 +1005,4 @@ class Orchestrator:
             max_revisions=getattr(settings, "critic_max_revisions", 3),
             min_quality_score=getattr(settings, "min_quality_score", 0.75),
         )
+

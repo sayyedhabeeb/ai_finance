@@ -19,14 +19,14 @@ from typing import Any, Optional
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agents.base import BaseAgent
-from agents.portfolio_manager.tools import (
+from backend.agents.base import BaseAgent
+from backend.agents.portfolio_manager.tools import (
     PORTFOLIO_MANAGER_TOOLS,
     portfolio_optimizer,
     rebalancer,
     tax_loss_harvester,
 )
-from config.schemas import (
+from backend.config.schemas import (
     AgentResult,
     AgentTask,
     AgentType,
@@ -641,3 +641,4 @@ comparison.
             confidence += 0.05
 
         return max(0.0, min(confidence, 1.0))
+

@@ -18,8 +18,8 @@ from typing import Any, Optional
 import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from agents.base import BaseAgent
-from agents.risk_analyst.tools import (
+from backend.agents.base import BaseAgent
+from backend.agents.risk_analyst.tools import (
     RISK_ANALYST_TOOLS,
     anomaly_detector,
     correlation_analyzer,
@@ -27,7 +27,7 @@ from agents.risk_analyst.tools import (
     stress_tester,
     var_calculator,
 )
-from config.schemas import (
+from backend.config.schemas import (
     AgentResult,
     AgentTask,
     AgentType,
@@ -600,3 +600,4 @@ patterns with Z-score fallback.
             confidence += 0.05
 
         return max(0.0, min(confidence, 1.0))
+

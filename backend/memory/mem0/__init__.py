@@ -5,7 +5,7 @@ Provides intelligent, automatically-managed long-term memory through the
 Mem0 platform, including deduplication and user-profile maintenance.
 """
 
-from .long_term_memory import Mem0LongTermMemory
+from backend.memory.mem0.long_term_memory import Mem0LongTermMemory
 
 __all__ = [
     "Mem0LongTermMemory",

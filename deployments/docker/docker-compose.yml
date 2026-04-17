@@ -1,0 +1,397 @@
+# =============================================================================
+# AI Financial Brain - Docker Compose
+# Full local development and production stack
+# =============================================================================
+
+x-common-env: &common-env
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  WEAVIATE_HOST: weaviate
+  WEAVIATE_PORT: 8080
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  PREFECT_API_URL: http://prefect:4200
+
+x-backend-env: &backend-env
+  <<: *common-env
+  DATABASE_URL: postgresql://aifb_user:${POSTGRES_PASSWORD}@postgres:5432/aifb_db
+  REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+  WEAVIATE_URL: http://weaviate:8080
+  JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+  JWT_ALGORITHM: HS256
+  JWT_EXPIRATION_MINUTES: 60
+  LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+  GROQ_API_KEY: ${GROQ_API_KEY}
+  GROQ_MODEL: ${GROQ_MODEL:-llama3-70b-8192}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://frontend:3000}
+  PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus_multiproc
+
+services:
+  # =========================================================================
+  # Backend - FastAPI Application
+  # =========================================================================
+  backend:
+    build:
+      context: ../../
+      dockerfile: deployments/docker/Dockerfile
+    container_name: aifb-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      <<: *backend-env
+      APP_ENV: ${APP_ENV:-development}
+    volumes:
+      - backend-data:/app/data
+      - backend-logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      weaviate:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - aifb-network
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+  # =========================================================================
+  # Frontend - Next.js Application
+  # =========================================================================
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: ../deployments/docker/Dockerfile.frontend
+    container_name: aifb-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000/ws}
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - aifb-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+
+  # =========================================================================
+  # PostgreSQL + TimescaleDB
+  # =========================================================================
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: aifb-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: aifb_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_secure_password}
+      POSTGRES_DB: aifb_db
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=512MB
+      -c effective_cache_size=1536MB
+      -c maintenance_work_mem=256MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=5MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aifb_user -d aifb_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - aifb-network
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+
+  # =========================================================================
+  # Redis
+  # =========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: aifb-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-changeme_redis_password}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme_redis_password}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aifb-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
+
+  # =========================================================================
+  # Weaviate - Vector Database
+  # =========================================================================
+  weaviate:
+    image: semitechnologies/weaviate:1.25.0
+    container_name: aifb-weaviate
+    restart: unless-stopped
+    ports:
+      - "${WEAVIATE_PORT:-8080}:8080"
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      CLUSTER_HOSTNAME: "node1"
+    volumes:
+      - weaviate-data:/var/lib/weaviate
+    networks:
+      - aifb-network
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+
+  # =========================================================================
+  # MLflow - ML Experiment Tracking
+  # =========================================================================
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.15.0
+    container_name: aifb-mlflow
+    restart: unless-stopped
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:///mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+    volumes:
+      - mlflow-data:/mlflow
+    networks:
+      - aifb-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
+  # =========================================================================
+  # Prefect - Workflow Orchestration
+  # =========================================================================
+  prefect:
+    image: prefecthq/prefect:3.0.0-python3.11
+    container_name: aifb-prefect
+    restart: unless-stopped
+    ports:
+      - "${PREFECT_PORT:-4200}:4200"
+    command: prefect server start --host 0.0.0.0 --port 4200
+    environment:
+      PREFECT_SERVER_API_HOST: 0.0.0.0
+      PREFECT_API_URL: http://prefect:4200/api
+    volumes:
+      - prefect-data:/opt/prefect
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - aifb-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
+  # =========================================================================
+  # Prometheus - Metrics Collection
+  # =========================================================================
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: aifb-prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--storage.tsdb.retention.size=4GB"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - backend
+    networks:
+      - aifb-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+
+  # =========================================================================
+  # Grafana - Dashboards & Visualization
+  # =========================================================================
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: aifb-grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme_grafana}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3001}
+      GF_INSTALL_PLUGINS: grafana-clock-panel,grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    networks:
+      - aifb-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1G
+
+  # =========================================================================
+  # Redis Exporter - Redis Metrics
+  # =========================================================================
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.58.0
+    container_name: aifb-redis-exporter
+    restart: unless-stopped
+    environment:
+      REDIS_ADDR: redis://:${REDIS_PASSWORD:-changeme_redis_password}@redis:6379
+      REDIS_EXPORTER_LOG_FORMAT: txt
+    depends_on:
+      - redis
+    networks:
+      - aifb-network
+
+  # =========================================================================
+  # PostgreSQL Exporter - PostgreSQL Metrics
+  # =========================================================================
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: aifb-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: postgresql://aifb_user:${POSTGRES_PASSWORD:-changeme_secure_password}@postgres:5432/aifb_db?sslmode=disable
+    depends_on:
+      - postgres
+    networks:
+      - aifb-network
+
+  # =========================================================================
+  # Node Exporter - Host Metrics
+  # =========================================================================
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: aifb-node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+)($|/)"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - aifb-network
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  aifb-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  weaviate-data:
+    driver: local
+  backend-data:
+    driver: local
+  backend-logs:
+    driver: local
+  prefect-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  mlflow-data:
+    driver: local

@@ -1,0 +1,38 @@
+# =============================================================================
+# AI Financial Brain - Grafana Datasource Provisioning
+# =============================================================================
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: "2.53.0"
+      timeInterval: "15s"
+    version: 1
+
+  - name: PostgreSQL
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    database: aifb_db
+    user: aifb_user
+    secureJsonData:
+      password: ${POSTGRES_PASSWORD}
+    editable: false
+    jsonData:
+      sslmode: disable
+      maxOpenConns: 10
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+      postgresVersion: 1600
+      timescaledb: true
+    version: 1

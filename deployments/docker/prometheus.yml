@@ -1,0 +1,108 @@
+# =============================================================================
+# AI Financial Brain - Prometheus Configuration
+# Scrape targets, custom intervals, and recording rules
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  scrape_timeout: 10s
+
+  external_labels:
+    cluster: "ai-financial-brain"
+    environment: "production"
+    monitor: "aifb-monitor"
+
+# Alertmanager configuration (optional, can be pointed to external)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: []
+
+# Load rule files
+rule_files:
+  - "alerts/*.yml"
+
+# =============================================================================
+# Scrape Configurations
+# =============================================================================
+scrape_configs:
+
+  # --------------------------------------------------------------------------
+  # FastAPI Backend Application
+  # --------------------------------------------------------------------------
+  - job_name: "aifb-backend"
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    metrics_path: "/metrics"
+    static_configs:
+      - targets:
+          - "backend:8000"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: "backend-1"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: "go_.*"
+        action: drop
+
+  # --------------------------------------------------------------------------
+  # Redis Exporter
+  # --------------------------------------------------------------------------
+  - job_name: "aifb-redis"
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "redis-exporter:9121"
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL Exporter
+  # --------------------------------------------------------------------------
+  - job_name: "aifb-postgres"
+    scrape_interval: 30s
+    static_configs:
+      - targets:
+          - "postgres-exporter:9187"
+
+  # --------------------------------------------------------------------------
+  # Node Exporter (Host Metrics)
+  # --------------------------------------------------------------------------
+  - job_name: "aifb-node"
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "node-exporter:9100"
+
+  # --------------------------------------------------------------------------
+  # Prometheus Self-Monitoring
+  # --------------------------------------------------------------------------
+  - job_name: "prometheus"
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - "localhost:9090"
+
+  # --------------------------------------------------------------------------
+  # Weaviate (Vector DB Metrics)
+  # --------------------------------------------------------------------------
+  - job_name: "aifb-weaviate"
+    scrape_interval: 30s
+    metrics_path: "/metrics"
+    static_configs:
+      - targets:
+          - "weaviate:2112"
+
+  # --------------------------------------------------------------------------
+  # MLflow (if metrics endpoint available)
+  # --------------------------------------------------------------------------
+  - job_name: "aifb-mlflow"
+    scrape_interval: 60s
+    metrics_path: "/api/2.0/mlflow/metrics"
+    static_configs:
+      - targets:
+          - "mlflow:5000"
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: ".*"
+        action: keep

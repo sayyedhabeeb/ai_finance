@@ -7,6 +7,7 @@ from typing import Any
 
 import structlog
 from langchain_core.language_models import BaseChatModel
+from langchain_community.chat_models import ChatOpenAI
 from langchain_groq import ChatGroq
 
 from backend.agents.base import BaseAgent
@@ -15,12 +16,12 @@ from backend.config.schemas import AgentType
 logger = structlog.get_logger(__name__)
 
 _AGENT_REGISTRY: dict[AgentType, tuple[str, str]] = {
-    AgentType.PERSONAL_CFO: ("agents.personal_cfo.agent", "PersonalCFOAgent"),
-    AgentType.MARKET_ANALYST: ("agents.market_analyst.agent", "MarketAnalystAgent"),
-    AgentType.NEWS_SENTIMENT: ("agents.news_sentiment.agent", "NewsSentimentAgent"),
-    AgentType.RISK_ANALYST: ("agents.risk_analyst.agent", "RiskAnalystAgent"),
-    AgentType.PORTFOLIO_MANAGER: ("agents.portfolio_manager.agent", "PortfolioManagerAgent"),
-    AgentType.CRITIC: ("agents.critic.agent", "CriticAgent"),
+    AgentType.PERSONAL_CFO: ("backend.agents.personal_cfo.agent", "PersonalCFOAgent"),
+    AgentType.MARKET_ANALYST: ("backend.agents.market_analyst.agent", "MarketAnalystAgent"),
+    AgentType.NEWS_SENTIMENT: ("backend.agents.news_sentiment.agent", "NewsSentimentAgent"),
+    AgentType.RISK_ANALYST: ("backend.agents.risk_analyst.agent", "RiskAnalystAgent"),
+    AgentType.PORTFOLIO_MANAGER: ("backend.agents.portfolio_manager.agent", "PortfolioManagerAgent"),
+    AgentType.CRITIC: ("backend.agents.critic.agent", "CriticAgent"),
 }
 
 _AGENT_NAME_TO_TYPE: dict[str, AgentType] = {t.value: t for t in AgentType}
@@ -130,25 +131,17 @@ def _resolve_agent_type(agent_type: str) -> AgentType:
 
 
 def _build_llm_from_settings(settings: Any) -> BaseChatModel | None:
-    """Instantiate a LangChain LLM from application settings using Groq only."""
+    """Instantiate a LangChain LLM from application settings using Groq."""
     provider = str(settings.llm_provider).lower().strip()
 
-    if provider != "groq":
-        raise ValueError(
-            f"Unsupported LLM_PROVIDER='{provider}'. "
-            "This project is configured for Groq only. Set LLM_PROVIDER=groq."
-        )
-
-    groq_key = settings.groq_api_key or ""
-    if hasattr(groq_key, "get_secret_value"):
-        groq_key = groq_key.get_secret_value()
-
-    if groq_key:
+    if provider == "groq":
         return ChatGroq(
-            api_key=groq_key,
-            model=settings.groq_model,
+            groq_api_key=settings.groq_api_key,
+            model_name=settings.groq_model,
         )
 
-    logger.warning("agent_factory.no_llm_available - agents will use heuristic mode")
-    return None
+    raise ValueError(
+        f"Unsupported LLM_PROVIDER='{provider}'. "
+        "This project is configured for Groq only. Set LLM_PROVIDER=groq."
+    )
 

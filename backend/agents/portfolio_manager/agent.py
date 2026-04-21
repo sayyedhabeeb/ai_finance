@@ -26,6 +26,7 @@ from backend.agents.portfolio_manager.tools import (
     rebalancer,
     tax_loss_harvester,
 )
+from backend.services.data_provider import DataProvider
 from backend.config.schemas import (
     AgentResult,
     AgentTask,
@@ -164,6 +165,14 @@ comparison.
 
     async def _execute_inner(self, task: AgentTask) -> AgentResult:
         """Inner execution with tool orchestration and LLM reasoning."""
+        # Hydrate context with real/simulated data if missing
+        context = dict(task.context)
+        if not context or "holdings" not in context:
+            logger.info("portfolio_agent.fetching_simulated_data")
+            sim_data = DataProvider.get_portfolio_data(context.get("user_id", "default"))
+            context.update(sim_data)
+            task.context = context
+
         context_str = self._format_context(task.context)
         enhanced_query = task.query
         if context_str:

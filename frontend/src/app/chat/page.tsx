@@ -49,75 +49,107 @@ export default function ChatPage() {
     }
   }, [input]);
 
-  // Simulated streaming response
-  const simulateStreamResponse = useCallback(
-    async () => {
+  // Real API call to backend
+  const sendQuery = useCallback(
+    async (queryText: string) => {
       setIsStreaming(true);
 
-      // Simulate agent processing
-      const agents = ["Portfolio Agent", "Risk Agent", "Market Data Agent"];
-      const usedAgents = agents.slice(
-        0,
-        1 + Math.floor(Math.random() * agents.length)
-      );
-
+      const assistantMessageId = crypto.randomUUID();
       const assistantMessage = {
-        id: crypto.randomUUID(),
+        id: assistantMessageId,
         role: "assistant" as const,
-        content: "",
+        content: "...", // Initial thought state
         timestamp: new Date().toISOString(),
-        agents: usedAgents,
-        sources: [
-          {
-            title: "S&P 500 Daily Report",
-            url: "https://example.com/report/sp500",
-            snippet: "S&P 500 gained 1.2% on strong earnings reports from major tech companies.",
-          },
-          {
-            title: "Portfolio Risk Analysis",
-            url: "https://example.com/report/risk",
-            snippet: "Current VaR at 95% confidence: $42,350. Portfolio beta: 1.12.",
-          },
-        ],
-        confidence: 0.87,
       };
 
       addMessage(assistantMessage);
 
-      // Simulate word-by-word streaming
-      const fullResponse = `Based on my analysis of your current portfolio and market conditions, here are my findings:\n\n## Portfolio Summary\n\nYour portfolio is currently **well-diversified** across 8 sectors with a total value of **$2,845,921.45**. The risk-adjusted return (Sharpe ratio) stands at **1.34**, which is above the benchmark.\n\n## Key Observations\n\n1. **Technology sector** is your largest allocation at 28.5% — this is 5% above your target allocation\n2. **Healthcare** is underweight by 3% and showing strong momentum\n3. Your portfolio's **beta of 1.12** means it moves roughly in line with the market\n\n## Recommendations\n\nI suggest rebalancing by:\n- Reducing tech exposure by 3-5%\n- Increasing healthcare allocation by 2-3%\n- Adding 1-2% to fixed income for downside protection\n\nThe current market conditions favor a **moderately bullish** stance with caution around upcoming Fed decisions.\n\n*Analysis based on data from ${usedAgents.join(", ")}.*`;
+      try {
+        const sessionUserId = "anonymous";
+        const sessionId = crypto.randomUUID();
 
-      const words = fullResponse.split(" ");
-      for (let i = 0; i < words.length; i++) {
-        await new Promise((r) => setTimeout(r, 20 + Math.random() * 30));
+        const response = await fetch("http://localhost:8000/api/v1/query", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query: queryText,
+            user_id: sessionUserId,
+            session_id: sessionId,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`API error: ${response.status} ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        const content =
+          data.answer ??
+          data.response ??
+          data.message ??
+          "No response received.";
+        const confidence =
+          typeof data.confidence === "number" ? data.confidence : 0;
+        const agentList = Array.isArray(data.agents_used)
+          ? data.agents_used
+          : data.agent_type
+            ? [data.agent_type]
+            : [];
+        const metadata = data.metadata ?? data.data ?? {};
+        const sourceList = Array.isArray(data.sources) ? data.sources : [];
+
+        // Update the message with the full response and metadata
         useChatStore.setState((state) => ({
           messages: state.messages.map((m) =>
-            m.id === assistantMessage.id
-              ? { ...m, content: words.slice(0, i + 1).join(" ") }
+            m.id === assistantMessageId
+              ? {
+                  ...m,
+                  content,
+                  agents: agentList,
+                  confidence,
+                  metadata,
+                  sources: sourceList.map((s: string) => ({
+                    title: s.charAt(0).toUpperCase() + s.slice(1).replace("_", " "),
+                    url: "#",
+                    snippet: `Information retrieved via ${s}.`,
+                  })),
+                }
               : m
           ),
         }));
+      } catch (error: any) {
+        useChatStore.setState((state) => ({
+          messages: state.messages.map((m) =>
+            m.id === assistantMessageId
+              ? { ...m, content: `Error: ${error.message}. Please ensure the backend is running.` }
+              : m
+          ),
+        }));
+      } finally {
+        setIsStreaming(false);
       }
-
-      setIsStreaming(false);
     },
     [addMessage, setIsStreaming]
   );
 
   const handleSend = useCallback(() => {
-    if (!input.trim() || isStreaming) return;
+    const trimmedInput = input.trim();
+    if (!trimmedInput || isStreaming) return;
 
     const userMessage = {
       id: crypto.randomUUID(),
       role: "user" as const,
-      content: input.trim(),
+      content: trimmedInput,
       timestamp: new Date().toISOString(),
     };
 
     addMessage(userMessage);
     setInput("");
-    simulateStreamResponse();
-  }, [input, isStreaming, addMessage, simulateStreamResponse]);
+    sendQuery(trimmedInput);
+  }, [input, isStreaming, addMessage, sendQuery]);
 
   const handleCopy = useCallback((text: string, id: string) => {
     navigator.clipboard.writeText(text);

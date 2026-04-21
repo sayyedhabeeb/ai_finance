@@ -54,6 +54,11 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("API_WORKERS", "api_workers"),
     )
 
+    cors_origins: str = Field(
+        default="http://localhost:3000,http://localhost:3001,http://localhost:5173",
+        validation_alias=AliasChoices("CORS_ORIGINS", "cors_origins"),
+    )
+
     database_url: str = Field(
         default=_DEFAULT_DATABASE_URL,
         validation_alias=AliasChoices("DATABASE_URL", "database_url"),
@@ -88,7 +93,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("GROQ_API_KEY", "groq_api_key"),
     )
     groq_model: str = Field(
-        default="llama3-70b-8192",
+        default="llama-3.1-8b-instant",
         validation_alias=AliasChoices("GROQ_MODEL", "groq_model"),
     )
     openai_api_key: str | None = Field(
@@ -110,11 +115,15 @@ class Settings(BaseSettings):
     )
 
     critic_enabled: bool = Field(
-        default=True,
+        # Disabled: Groq free-tier 429 fix (re-enable after upgrade to Dev/Pro tier)
+        # default=True,
+        default=False,
         validation_alias=AliasChoices("CRITIC_ENABLED", "critic_enabled"),
     )
     critic_max_revisions: int = Field(
-        default=3,
+        # Disabled: Groq free-tier 429 fix (re-enable after upgrade to Dev/Pro tier)
+        # default=3,
+        default=0,
         validation_alias=AliasChoices("CRITIC_MAX_REVISIONS", "critic_max_revisions"),
     )
     min_quality_score: float = Field(
@@ -169,10 +178,6 @@ class Settings(BaseSettings):
         return self.redis_password
 
     @property
-    def GROQ_API_KEY(self) -> str | None:
-        return self.groq_api_key
-
-    @property
     def WEAVIATE_URL(self) -> str:
         return self.weaviate_url
 
@@ -182,6 +187,6 @@ def get_settings() -> Settings:
     settings = Settings()
     if not settings.database_url or settings.database_url == _DEFAULT_DATABASE_URL:
         logger.warning("DATABASE_URL is missing or defaulted; database connection may be non-production.")
-    if not settings.groq_api_key:
-        logger.warning("GROQ_API_KEY is not set.")
+    if not settings.cors_origins:
+        logger.warning("CORS_ORIGINS is not set; using local development defaults.")
     return settings

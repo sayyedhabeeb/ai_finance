@@ -27,6 +27,7 @@ from backend.agents.risk_analyst.tools import (
     stress_tester,
     var_calculator,
 )
+from backend.services.data_provider import DataProvider
 from backend.config.schemas import (
     AgentResult,
     AgentTask,
@@ -137,6 +138,22 @@ patterns with Z-score fallback.
 
     async def _execute_inner(self, task: AgentTask) -> AgentResult:
         """Inner execution with tool orchestration and LLM reasoning."""
+        # Hydrate context with real/simulated returns if missing
+        context = dict(task.context)
+        if not context or "returns" not in context:
+            logger.info("risk_agent.fetching_simulated_returns")
+            holdings_info = context.get("holdings", DataProvider.get_portfolio_data().get("holdings", []))
+            symbols = [h["symbol"] for h in holdings_info] if isinstance(holdings_info, list) else []
+            if not symbols:
+                symbols = ["RELIANCE.NS", "HDFCBANK.NS", "TCS.NS"]
+            
+            sim_returns = DataProvider.get_market_returns(symbols)
+            # Flatten or pick one for the 'returns' field if needed by simple var_calculator
+            context["returns"] = sim_returns[symbols[0]]
+            context["returns_data"] = sim_returns
+            context["holdings"] = {h["symbol"]: {"weight": h["weight"], "beta": 1.0} for h in holdings_info} if isinstance(holdings_info, list) else {}
+            task.context = context
+
         context_str = self._format_context(task.context)
         enhanced_query = task.query
         if context_str:

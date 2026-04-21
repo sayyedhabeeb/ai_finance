@@ -51,6 +51,7 @@ from backend.agents.base import BaseAgent
 from backend.config.schemas import AgentResult, AgentTask, AgentType, QueryType
 from backend.services.agent_factory import AgentFactory
 from backend.services.graph_state import GraphState
+from backend.services.llm_service import is_llm_unavailable_response
 from backend.services.query_router import QueryRouter
 from backend.services.synthesizer import ResponseSynthesizer
 
@@ -428,6 +429,7 @@ def aggregate_results_node(state: GraphState) -> dict[str, Any]:
     all_recommendations: list[str] = []
     source_seen: set[str] = set()
     rec_seen: set[str] = set()
+    llm_unavailable = False
 
     for agent_name, result in agent_results.items():
         if not isinstance(result, dict):
@@ -435,6 +437,12 @@ def aggregate_results_node(state: GraphState) -> dict[str, Any]:
         if result.get("success"):
             total_conf += result.get("confidence", 0.0)
             conf_count += 1
+
+        summary_text = str(result.get("summary", ""))
+        output_text = str(result.get("output", ""))
+        if is_llm_unavailable_response(summary_text) or is_llm_unavailable_response(output_text):
+            llm_unavailable = True
+
         for src in result.get("sources", []):
             if src not in source_seen:
                 source_seen.add(src)
@@ -445,15 +453,19 @@ def aggregate_results_node(state: GraphState) -> dict[str, Any]:
                 all_recommendations.append(rec)
 
     confidence = total_conf / conf_count if conf_count else 0.0
+    if llm_unavailable:
+        confidence = min(confidence, 0.2)
     elapsed = time.perf_counter() - t0
 
     meta = dict(state.get("metadata", {}))
     meta["aggregation_time"] = elapsed
+    meta["llm_unavailable"] = llm_unavailable
 
     logger.info(
         "node.aggregate_results.done",
         confidence=confidence,
         source_count=len(all_sources),
+        llm_unavailable=llm_unavailable,
         elapsed=elapsed,
     )
 
@@ -595,13 +607,8 @@ def _should_run_critic(state: GraphState) -> str:
 
     Routes to critic when critic is enabled, otherwise skips to synthesis.
     """
-    meta = state.get("metadata", {})
-    if not meta.get("critic_enabled", True):
-        logger.info("routing.critic_disabled -> synthesize")
-        return "synthesize_response"
-    logger.info("routing.critic_enabled -> critic")
-    return "critic"
-
+    # Disabled: Groq free-tier 429 fix (re-enable after upgrade)
+    return "synthesize_response"
 
 def _route_by_critique(state: GraphState) -> str:
     """Conditional edge from ``critic_node``.
@@ -611,38 +618,8 @@ def _route_by_critique(state: GraphState) -> str:
     * ``"synthesize_response"`` — otherwise (response is good enough or max
       revisions reached).
     """
-    critic_result = state.get("critic_result")
-    revision_count = state.get("revision_count", 0)
-    max_revisions = state.get("max_revisions", 3)
-
-    if not critic_result:
-        logger.info("routing.no_critic_result -> synthesize")
-        return "synthesize_response"
-
-    # Score lives in critic_result["data"]["overall_score"] (our format)
-    # or in critic_result["confidence"] (direct AgentResult field).
-    data = critic_result.get("data", {})
-    score = data.get("overall_score", critic_result.get("confidence", 1.0))
-    passed = data.get("passed", score >= 0.75)
-
-    min_score = 0.75
-    meta = state.get("metadata", {})
-    if "min_quality_score" in meta:
-        min_score = float(meta["min_quality_score"])
-
-    if not passed and score < min_score and revision_count < max_revisions:
-        logger.info(
-            "routing.critic_failed -> revision",
-            score=score,
-            min_score=min_score,
-            revision_count=revision_count,
-            max_revisions=max_revisions,
-        )
-        return "revision"
-
-    logger.info("routing.critic_passed -> synthesize", score=score)
+    # Disabled: Groq free-tier 429 fix (re-enable after upgrade)
     return "synthesize_response"
-
 
 # ════════════════════════════════════════════════════════════════
 # Graph builder
@@ -747,8 +724,11 @@ class Orchestrator:
     def __init__(
         self,
         *,
-        critic_enabled: bool = True,
-        max_revisions: int = 3,
+        # Disabled: Groq free-tier 429 fix (re-enable after upgrade to Dev/Pro tier)
+        # critic_enabled: bool = True,
+        critic_enabled: bool = False,
+        # max_revisions: int = 3,
+        max_revisions: int = 0,
         min_quality_score: float = 0.75,
         timeout_seconds: float = 120.0,
         agent_factory: AgentFactory | None = None,

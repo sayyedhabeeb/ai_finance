@@ -1,8 +1,7 @@
 """
 Unified embedding service using local HuggingFace sentence-transformers.
 
-Groq currently does not provide embedding endpoints in this codebase, so
-embeddings are generated locally with sentence-transformers by default.
+Embeddings are generated locally with sentence-transformers by default.
 """
 
 from __future__ import annotations

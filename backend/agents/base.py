@@ -5,7 +5,7 @@
 Abstract base class for all AI agents in the system.
 
 Every agent inherits from :class:`BaseAgent`, which provides:
-- Lazy LLM initialisation (Groq via LangChain)
+- Lazy LLM initialisation (Groq via LangChain client)
 - Tenacity-based retry with exponential back-off
 - Structured execution timing & metrics tracking
 - Structured logging via ``structlog``
@@ -27,6 +27,7 @@ from typing import Any, Callable, Optional
 import structlog
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_community.chat_models import ChatOpenAI
 from langchain_groq import ChatGroq
 from tenacity import (
     retry,
@@ -41,6 +42,7 @@ from backend.config.schemas import (
     AgentTask,
     AgentType,
 )
+from backend.services.llm_service import generate_response
 
 logger = structlog.get_logger(__name__)
 
@@ -194,12 +196,10 @@ class BaseAgent(abc.ABC):
                 "This project is configured for Groq only. Set LLM_PROVIDER=groq."
             )
 
-        if not self._groq_api_key:
-            raise ValueError("GROQ_API_KEY is required when LLM_PROVIDER=groq.")
-
         return ChatGroq(
-            api_key=self._groq_api_key,
-            model=self._llm_model,
+            groq_api_key=self._groq_api_key,
+            model_name=self._llm_model,
+            temperature=self._groq_temperature,
         )
 
     # ------------------------------------------------------------------
@@ -251,11 +251,18 @@ class BaseAgent(abc.ABC):
         -------
         The LLM response (``AIMessage``).
         """
-        invoke = functools.partial(self.llm.invoke, messages, **kwargs)
+        # Extract system and human messages for generate_response
+        system_msg = next((m.content for m in messages if isinstance(m, SystemMessage)), "You are a financial AI assistant.")
+        human_msg = next((m.content for m in messages if isinstance(m, HumanMessage)), "")
+        
+        args = (human_msg, system_msg) if isinstance(system_msg, str) else (human_msg, "")
 
         @self._retry(max_attempts=3, retry_types=(Exception,))
         def _invoke() -> Any:
-            return invoke()
+            # Wrap response in a mock AIMessage-like object if needed by caller
+            from langchain_core.messages import AIMessage
+            content = generate_response(*args)
+            return AIMessage(content=content)
 
         return _invoke()
 
@@ -277,11 +284,19 @@ class BaseAgent(abc.ABC):
         -------
         The LLM response (``AIMessage``).
         """
-        invoke = functools.partial(self.llm.ainvoke, messages, **kwargs)
+        # Extract system and human messages for generate_response
+        system_msg = next((m.content for m in messages if isinstance(m, SystemMessage)), "You are a financial AI assistant.")
+        human_msg = next((m.content for m in messages if isinstance(m, HumanMessage)), "")
+        
+        args = (human_msg, system_msg) if isinstance(system_msg, str) else (human_msg, "")
 
         @self._retry(max_attempts=3, retry_types=(Exception,))
         async def _invoke() -> Any:
-            return await invoke()
+            from langchain_core.messages import AIMessage
+            # generate_response is sync, so run in threadpool for async compatibility
+            from starlette.concurrency import run_in_threadpool
+            content = await run_in_threadpool(generate_response, *args)
+            return AIMessage(content=content)
 
         return await _invoke()
 
@@ -488,7 +503,7 @@ class BaseAgent(abc.ABC):
         return prompt
 
     @staticmethod
-    def _format_context(context: dict[str, Any], max_length: int = 4000) -> str:
+    def _format_context(context: dict[str, Any], max_length: int = 1200) -> str:
         """Render a ``dict`` context into a readable block suitable for
         inclusion in a prompt.
 

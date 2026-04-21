@@ -65,20 +65,20 @@ class MarketWeaviateClient:
         Weaviate REST/gRPC URL.
     api_key:
         Weaviate API key (``None`` for local unauthenticated).
-    groq_api_key:
-        Unused legacy placeholder for backward compatibility.
-        Groq is used for LLM calls, while embeddings should be pre-computed.
+    lm_studio_api_key:
+        Unused placeholder for backward compatibility.
+        Embeddings are expected to be pre-computed.
     """
 
     def __init__(
         self,
         weaviate_url: str | None = None,
         api_key: str | None = None,
-        groq_api_key: str | None = None,
+        lm_studio_api_key: str | None = None,
     ) -> None:
         self._url = weaviate_url
         self._api_key = api_key
-        self._groq_key = groq_api_key
+        self._lm_studio_key = lm_studio_api_key
         self._client: weaviate.WeaviateClient | None = None
 
     # ── Connection lifecycle ────────────────────────────────
@@ -168,7 +168,7 @@ class MarketWeaviateClient:
                 vectorizer_config=(
                     Configure.Vectorizer.none()
                     if vectorizer == "none"
-                    # TODO: Weaviate has no native Groq text2vec module.
+                    # TODO: Weaviate has no native LM Studio text2vec module.
                     # Use pre-computed embeddings and vectorizer="none".
                     else Configure.Vectorizer.none()
                 ),

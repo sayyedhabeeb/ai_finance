@@ -16,13 +16,13 @@ from pydantic import BaseModel, Field, confloat
 from starlette.concurrency import run_in_threadpool
 
 from backend.config.schemas import AgentTask, AgentType
-from backend.services.agent_factory import AgentFactory
-from backend.services.llm_service import generate_response
+from backend.services.orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
-_agent_factory = AgentFactory()
+legacy_router = APIRouter(tags=["legacy"])
+_orchestrator = Orchestrator.from_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +52,8 @@ class UserQuery(BaseModel):
 class QueryRequest(BaseModel):
     """Inbound query payload for /query endpoint."""
     query: str = Field(..., min_length=1, max_length=10_000)
+    user_id: Optional[str] = Field(None, description="Optional user identifier")
+    session_id: Optional[str] = Field(None, description="Optional session identifier")
 
 
 class QueryResponse(BaseModel):
@@ -60,6 +62,10 @@ class QueryResponse(BaseModel):
     response: Optional[str] = None
     status: str
     message: Optional[str] = None
+    data: Optional[Dict[str, Any]] = None
+    confidence: Optional[float] = None
+    sources: Optional[List[str]] = None
+    agent_type: Optional[str] = None
 
 
 class StreamChunk(BaseModel):
@@ -166,7 +172,8 @@ def _retrieve_context_chunks(request: Request, query_text: str, limit: int = 3) 
 
 async def _run_llm_response(user_query: str) -> tuple[str, str]:
     answer = await run_in_threadpool(generate_response, user_query)
-    return answer, "llama3-8b-8192"
+    model_name = get_settings().groq_model or "llama-3.1-8b-instant"
+    return answer, model_name
 
 
 def _route_agent_type(user_query: str) -> AgentType | None:
@@ -180,7 +187,19 @@ def _route_agent_type(user_query: str) -> AgentType | None:
     return None
 
 
-async def _run_agent_completion(agent_type: AgentType, user_query: str) -> tuple[str, str]:
+def _is_canned_response(text: str) -> bool:
+    lowered = (text or "").lower()
+    canned_markers = (
+        "based on my analysis of your current portfolio",
+        "portfolio summary",
+        "analysis based on data from portfolio agent",
+        "key observations",
+        "recommendations",
+    )
+    return any(marker in lowered for marker in canned_markers)
+
+
+async def _run_agent_completion(agent_type: AgentType, user_query: str) -> tuple[str, str, float]:
     agent = _agent_factory.create_agent(agent_type)
     task = AgentTask(
         agent_type=agent_type,
@@ -199,25 +218,37 @@ async def _run_agent_completion(agent_type: AgentType, user_query: str) -> tuple
         )
     else:
         answer = str(output)
-    return answer.strip(), agent_type.value
+    return answer.strip(), agent_type.value, result.confidence
 
 
 async def _dispatch_to_agent(query_text: str, query_id: str, redis_client, request: Request) -> Dict[str, Any]:
     """Dispatch a user query to keyword-routed agent, with Groq fallback."""
     import json
+    settings = get_settings()
 
     user_query = query_text
 
     routed_agent = _route_agent_type(user_query)
     answer = ""
     model_name = ""
+    confidence = 0.0
+    sources = []
     path = "llm"
 
     if routed_agent is not None:
         try:
-            answer, model_name = await _run_agent_completion(routed_agent, user_query)
-            path = f"agent:{routed_agent.value}"
-            logger.info("Query routed to agent path=%s query_id=%s", path, query_id)
+            answer, model_name, confidence = await _run_agent_completion(routed_agent, user_query)
+            sources = ["agent"]
+            if _is_canned_response(answer):
+                logger.warning(
+                    "Canned agent response detected; forcing LLM fallback query_id=%s path=agent:%s",
+                    query_id,
+                    routed_agent.value,
+                )
+                answer = ""
+            else:
+                path = f"agent:{routed_agent.value}"
+                logger.info("Query routed to agent path=%s query_id=%s", path, query_id)
         except Exception:
             logger.exception(
                 "Agent execution failed; falling back to LLM path=agent:%s query_id=%s",
@@ -235,19 +266,24 @@ async def _dispatch_to_agent(query_text: str, query_id: str, redis_client, reque
                 "Use the context when relevant, but do not fabricate facts."
             )
         answer, model_name = await _run_llm_response(prompt_query)
+        confidence = 0.85  # Default LLM confidence
+        sources = ["llm"]
+        if context_chunks:
+            sources.append("vector_db")
         path = "llm:groq"
         logger.info("Query routed to LLM path=%s query_id=%s", path, query_id)
 
     result = {
         "status": "success",
         "answer": answer,
+        "confidence": confidence,
+        "sources": sources,
         "data": {
             "detected_intent": "financial_query",
-            "provider": "groq",
-            "model": model_name,
+            "provider": settings.llm_provider,
+            "model": model_name or settings.groq_model,
             "path": path,
         },
-        "sources": ["agent" if path.startswith("agent:") else "llm"],
         "agent_type": routed_agent.value if routed_agent and path.startswith("agent:") else "llm_assistant",
     }
 
@@ -264,46 +300,79 @@ async def _dispatch_to_agent(query_text: str, query_id: str, redis_client, reque
 
 @router.post(
     "/query",
-    response_model=QueryResponse,
     status_code=status.HTTP_200_OK,
     summary="Submit a query to the AI Financial Brain",
-    description="Accepts a natural-language financial query and returns a structured response.",
 )
 async def post_query(
     body: QueryRequest,
     request: Request,
-) -> QueryResponse:
-    query_id = f"q_{uuid.uuid4()}"
+) -> Dict[str, Any]:
     user_query = body.query
+    logger.info("orchestration_layer.routing_query query=%s", user_query[:120])
+    
+    # Process through the full LangGraph orchestration layer
+    result = await _orchestrator.process_query(user_query)
+    
+    # Map into the requested structured output format
+    return {
+        "answer": result.get("response"),
+        "agents_used": list(result.get("agent_results", {}).keys()),
+        "confidence": result.get("confidence", 0.0),
+        "sources": result.get("sources", []),
+        "metadata": {
+            "query_type": result.get("query_type"),
+            "execution_time_sec": round(result.get("execution_time", 0.0), 3),
+        }
+    }
+@legacy_router.post(
+    "/chat",
+    status_code=status.HTTP_200_OK,
+    summary="Frontend alias for submitting a query",
+)
+async def post_chat(
+    body: Dict[str, Any],
+    request: Request,
+) -> Dict[str, Any]:
+    """Alias for /query to support legacy/current frontend code."""
+    query_text = body.get("message") or body.get("query")
+    if not query_text:
+        raise HTTPException(status_code=400, detail="Message or query is required")
+    
+    # Extract query and pass to same orchestration logic
+    result = await _orchestrator.process_query(query_text)
+    
+    return {
+        "answer": result.get("response"),
+        "agents_used": list(result.get("agent_results", {}).keys()),
+        "confidence": result.get("confidence", 0.0),
+        "sources": result.get("sources", []),
+        "metadata": {
+            "query_type": result.get("query_type"),
+            "execution_time_sec": round(result.get("execution_time", 0.0), 3),
+        }
+    }
 
-    redis_client = getattr(request.app.state, "redis", None)
-    logger.info("Received query request query_id=%s query=%s", query_id, user_query[:120])
-    _store_query(query_id, {"query": user_query})
 
-    try:
-        result = await _dispatch_to_agent(user_query, query_id, redis_client, request)
-    except Exception as exc:
-        logger.exception("Agent dispatch failed for query %s", query_id)
-        _complete_query(query_id, {"status": "error", "error": str(exc)})
-        return QueryResponse(
-            query=user_query,
-            response=None,
-            status="error",
-            message=str(exc),
-        )
-
-    _complete_query(query_id, result)
-    logger.info(
-        "Completed query request query_id=%s status=success response=%s",
-        query_id,
-        result.get("answer", "")[:200],
+@legacy_router.post(
+    "/chat/stream",
+    status_code=status.HTTP_200_OK,
+    summary="Frontend alias for streaming query",
+)
+async def post_chat_stream(
+    body: Dict[str, Any],
+    request: Request,
+) -> StreamChunk:
+    """Alias for /query/stream."""
+    # Convert simple chat body to UserQuery-like schema
+    query_text = body.get("message") or body.get("query")
+    user_id = body.get("user_id", "anonymous")
+    
+    internal_body = UserQuery(
+        user_id=user_id,
+        query=query_text,
+        session_id=body.get("conversation_id")
     )
-    return QueryResponse(
-        query=user_query,
-        response=result.get("answer", ""),
-        status="success",
-        message=None,
-    )
+    return await post_query_stream(internal_body, request)
 
 
 @router.post(

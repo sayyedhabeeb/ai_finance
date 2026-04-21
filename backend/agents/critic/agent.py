@@ -166,7 +166,7 @@ to show to a user without revision. A score of 0.90+ represents "excellent quali
             task_id=task.task_id,
             agent_type=self.agent_type,
             output=output,
-            confidence=critique.score,
+            confidence=float(critique.get("score", 0.0)),
             processing_time=0.0,
             metadata={
                 "scores": {

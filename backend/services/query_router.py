@@ -163,6 +163,29 @@ class QueryRouter:
             query_type, _ROUTING_TABLE[QueryType.GENERAL]
         )
 
+        # Token-budget optimization:
+        # lightweight market-summary requests should avoid spawning the full
+        # multi-agent market pipeline to reduce local LLM token pressure.
+        if query_type == QueryType.MARKET_QUERY:
+            q = query.lower().strip()
+            summary_markers = (
+                "summary",
+                "quick",
+                "short",
+                "today",
+                "overview",
+                "snapshot",
+            )
+            if len(q) <= 140 or any(marker in q for marker in summary_markers):
+                sequential = []
+                parallel = [["market_analyst"]]
+                logger.info(
+                    "query_router.market_query_lightweight_route",
+                    query_preview=q[:120],
+                    sequential=sequential,
+                    parallel_groups=parallel,
+                )
+
         logger.info(
             "query_router.determine_active_agents",
             query_type=query_type.value,

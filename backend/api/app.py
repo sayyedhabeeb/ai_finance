@@ -17,7 +17,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from backend.api.routes.query import router as query_router
+from backend.api.routes.query import router as query_router, legacy_router
 from backend.api.routes.portfolio import router as portfolio_router
 from backend.api.routes.risk import router as risk_router
 from backend.api.routes.memory import router as memory_router
@@ -213,11 +213,7 @@ app.add_middleware(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "https://app.aifinbrain.io",
-    ],
+    allow_origins=[o.strip() for o in get_settings().cors_origins.split(",")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -229,6 +225,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 app.include_router(health_router)
+app.include_router(legacy_router)
 app.include_router(query_router)
 app.include_router(portfolio_router)
 app.include_router(risk_router)

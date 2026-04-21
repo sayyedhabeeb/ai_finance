@@ -49,8 +49,8 @@ class Mem0LongTermMemory:
                 "llm": {
                     "provider": "groq",
                     "config": {
-                        "model": "llama3-70b-8192",
-                        "api_key": os.environ.get("GROQ_API_KEY", ""),
+                        "model": os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant"),
+                        "api_key": os.environ.get("GROQ_API_KEY"),
                         "temperature": 0.0,
                     },
                 },

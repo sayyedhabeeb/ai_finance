@@ -254,7 +254,7 @@ class AgentResult(BaseModel):
     agent_type: AgentType = Field(
         description="The agent that produced this result.",
     )
-    output: dict[str, Any] = Field(
+    output: dict[str, Any] | str = Field(
         default_factory=dict,
         description="Structured output — may contain text, data, scores, recommendations, etc.",
     )

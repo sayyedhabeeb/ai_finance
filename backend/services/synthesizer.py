@@ -166,6 +166,11 @@ def _confidence_label(confidence: float) -> str:
     return "Low"
 
 
+def _is_provider_outage_text(text: str) -> bool:
+    lowered = (text or "").lower()
+    return "ai provider is temporarily unavailable" in lowered
+
+
 # ── Heuristic follow-up suggestions by query type ──────────────
 
 _FOLLOW_UPS_MAP: dict[str, list[str]] = {
@@ -342,6 +347,17 @@ class ResponseSynthesizer:
         follow_ups = list(
             _FOLLOW_UPS_MAP.get(query_type, _FOLLOW_UPS_MAP["general"])
         )
+        summary_texts = [
+            str(result.get("summary", ""))
+            for result in agent_results.values()
+            if isinstance(result, dict)
+        ]
+        if summary_texts and all(_is_provider_outage_text(text) for text in summary_texts):
+            return (
+                "I could not reach the configured AI provider right now, so a full analysis was not possible.\n\n"
+                f"Query received: {query}\n\n"
+                "Please retry shortly. If the issue persists, check your Groq API configuration."
+            )
 
         sections: list[str] = []
 
@@ -363,7 +379,9 @@ class ResponseSynthesizer:
         summary_parts: list[str] = []
         for agent_name, result in agent_results.items():
             if isinstance(result, dict) and result.get("summary"):
-                summary_parts.append(result["summary"])
+                summary_text = str(result["summary"])
+                if not _is_provider_outage_text(summary_text):
+                    summary_parts.append(summary_text)
         sections.append(
             " ".join(summary_parts) if summary_parts
             else "Analysis complete. See detailed sections below."
@@ -374,6 +392,9 @@ class ResponseSynthesizer:
         sections.append("## Detailed Analysis\n")
         for agent_name, result in agent_results.items():
             if not isinstance(result, dict):
+                continue
+            summary_text = str(result.get("summary", ""))
+            if _is_provider_outage_text(summary_text):
                 continue
             sections.append(f"### {agent_name.replace('_', ' ').title()}\n")
             sections.append(result.get("summary", "No summary available."))

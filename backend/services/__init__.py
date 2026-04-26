@@ -1,22 +1,29 @@
-"""Services package — LangGraph orchestration for the AI Financial Brain."""
+"""Services package for the AI Financial Brain."""
 from __future__ import annotations
 
-from backend.services.agent_factory import AgentFactory
-from backend.services.graph_state import GraphState
-from backend.services.orchestrator import Orchestrator, build_orchestration_graph
-from backend.services.query_router import QueryRouter
-from backend.services.synthesizer import ResponseSynthesizer
+from importlib import import_module
+from typing import Any
 
 __all__ = [
-    # Graph state
     "GraphState",
-    # Graph builder
     "build_orchestration_graph",
-    # Main entry point
     "Orchestrator",
-    # Utilities
     "QueryRouter",
     "ResponseSynthesizer",
     "AgentFactory",
 ]
 
+
+def __getattr__(name: str) -> Any:
+    if name == "GraphState":
+        return import_module("backend.services.graph_state").GraphState
+    if name in {"Orchestrator", "build_orchestration_graph"}:
+        module = import_module("backend.services.orchestrator")
+        return getattr(module, name)
+    if name == "QueryRouter":
+        return import_module("backend.services.query_router").QueryRouter
+    if name == "ResponseSynthesizer":
+        return import_module("backend.services.synthesizer").ResponseSynthesizer
+    if name == "AgentFactory":
+        return import_module("backend.services.agent_factory").AgentFactory
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

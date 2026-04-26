@@ -6,12 +6,12 @@ from backend.config.settings import get_settings
 logger = logging.getLogger(__name__)
 
 def _get_groq_client() -> Groq:
-    """Initialize and return a Groq client using the current environment variable."""
-    api_key = os.getenv("GROQ_API_KEY")
+    """Initialize and return a Groq client using app settings or environment."""
+    settings = get_settings()
+    api_key = settings.groq_api_key or os.getenv("GROQ_API_KEY")
     if not api_key:
         logger.error("GROQ_API_KEY is missing or not loaded from environment")
     
-    # Per user instruction: initialized ONLY like this
     return Groq(api_key=api_key)
 
 
@@ -40,7 +40,7 @@ def generate_response(user_query: str, system_prompt: str = "You are a financial
     settings = get_settings()
     model = settings.groq_model or "llama-3.1-8b-instant"
 
-    api_key = os.getenv("GROQ_API_KEY")
+    api_key = settings.groq_api_key or os.getenv("GROQ_API_KEY")
     if not api_key:
         logger.error("GROQ_API_KEY missing or not loaded during query")
         return _fallback_response(user_query, "GROQ_API_KEY is not configured in environment.")
@@ -56,7 +56,7 @@ def generate_response(user_query: str, system_prompt: str = "You are a financial
             ],
             model=model,
             temperature=0.7,
-            max_tokens=256,
+            max_tokens=1024,
         )
 
         content = chat_completion.choices[0].message.content

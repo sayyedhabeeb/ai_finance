@@ -39,23 +39,47 @@ from typing import Any, AsyncIterator
 import structlog
 from typing import TYPE_CHECKING
 
-from langgraph.graph import END, StateGraph
-
 if TYPE_CHECKING:
+    from backend.services.agent_factory import AgentFactory
     from langgraph.graph.state import CompiledStateGraph as CompiledGraph
 else:
     # At runtime we don't need the type; just use Any for the annotation.
     CompiledGraph: type = None  # type: ignore[assignment,misc]
 
-from backend.agents.base import BaseAgent
 from backend.config.schemas import AgentResult, AgentTask, AgentType, QueryType
-from backend.services.agent_factory import AgentFactory
 from backend.services.graph_state import GraphState
-from backend.services.llm_service import is_llm_unavailable_response
-from backend.services.query_router import QueryRouter
-from backend.services.synthesizer import ResponseSynthesizer
 
 logger = structlog.get_logger(__name__)
+
+
+def _get_agent_factory_cls():
+    from backend.services.agent_factory import AgentFactory
+
+    return AgentFactory
+
+
+def _build_llm_from_settings_lazy(settings: Any) -> Any:
+    from backend.services.agent_factory import _build_llm_from_settings
+
+    return _build_llm_from_settings(settings)
+
+
+def _get_query_router_cls():
+    from backend.services.query_router import QueryRouter
+
+    return QueryRouter
+
+
+def _get_synthesizer_cls():
+    from backend.services.synthesizer import ResponseSynthesizer
+
+    return ResponseSynthesizer
+
+
+def _is_llm_unavailable_response(text: str) -> bool:
+    from backend.services.llm_service import is_llm_unavailable_response
+
+    return is_llm_unavailable_response(text)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -68,13 +92,17 @@ class _Dependencies:
 
     def __init__(
         self,
-        agent_factory: AgentFactory | None = None,
-        query_router: QueryRouter | None = None,
-        synthesizer: ResponseSynthesizer | None = None,
+        agent_factory: "AgentFactory | None" = None,
+        query_router: Any = None,
+        synthesizer: Any = None,
     ) -> None:
-        self.agent_factory = agent_factory or AgentFactory()
-        self.query_router = query_router or QueryRouter()
-        self.synthesizer = synthesizer or ResponseSynthesizer()
+        agent_factory_cls = _get_agent_factory_cls()
+        query_router_cls = _get_query_router_cls()
+        synthesizer_cls = _get_synthesizer_cls()
+
+        self.agent_factory = agent_factory or agent_factory_cls.from_settings()
+        self.query_router = query_router or query_router_cls()
+        self.synthesizer = synthesizer or synthesizer_cls()
 
 
 _deps: _Dependencies | None = None
@@ -133,7 +161,7 @@ async def _execute_single_agent(
     """
     deps = _get_deps()
     agent_type = _AGENT_NAME_TO_TYPE[agent_name]
-    agent: BaseAgent = deps.agent_factory.create_agent(agent_type)
+    agent = deps.agent_factory.create_agent(agent_type)
 
     query = state["user_query"]
 
@@ -440,7 +468,7 @@ def aggregate_results_node(state: GraphState) -> dict[str, Any]:
 
         summary_text = str(result.get("summary", ""))
         output_text = str(result.get("output", ""))
-        if is_llm_unavailable_response(summary_text) or is_llm_unavailable_response(output_text):
+        if _is_llm_unavailable_response(summary_text) or _is_llm_unavailable_response(output_text):
             llm_unavailable = True
 
         for src in result.get("sources", []):
@@ -656,6 +684,8 @@ def build_orchestration_graph() -> CompiledGraph:
           │                                                                    │
           └──── END ◄────────────────── synthesize_response_node ◄─────────────┘
     """
+    from langgraph.graph import END, StateGraph
+
     graph = StateGraph(GraphState)
 
     # ── Add all nodes ───────────────────────────────────────────
@@ -731,12 +761,28 @@ class Orchestrator:
         max_revisions: int = 0,
         min_quality_score: float = 0.75,
         timeout_seconds: float = 120.0,
-        agent_factory: AgentFactory | None = None,
+        agent_factory: "AgentFactory | None" = None,
     ) -> None:
+        print("DEBUG: Orchestrator initializing...")
         # Initialise global deps
-        factory = agent_factory or AgentFactory()
-        router = QueryRouter()
-        synthesizer = ResponseSynthesizer()
+        from backend.config.settings import get_settings
+        settings = get_settings()
+        
+        # Build LLM from settings to pass to synthesizer and factory
+        _llm = _build_llm_from_settings_lazy(settings)
+        print("DEBUG: Orchestrator dependencies loaded successfully")
+        
+        # Task 5: Add a startup log to confirm LLM loaded
+        import logging
+        logging.getLogger(__name__).info(f"Orchestrator LLM loaded: {type(_llm).__name__ if _llm else 'NONE — CHECK GROQ_API_KEY'}")
+
+        agent_factory_cls = _get_agent_factory_cls()
+        query_router_cls = _get_query_router_cls()
+        synthesizer_cls = _get_synthesizer_cls()
+
+        factory = agent_factory or agent_factory_cls(llm=_llm)
+        router = query_router_cls(llm=_llm)
+        synthesizer = synthesizer_cls(llm=_llm)
         _reset_deps(
             _Dependencies(
                 agent_factory=factory,

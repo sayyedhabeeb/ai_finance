@@ -11,15 +11,13 @@ import {
 } from "lucide-react";
 import { useChatStore } from "@/lib/store";
 import { ChatMessage } from "@/components/ChatMessage";
+import { apiClient } from "@/lib/api";
 
-// ---------------------------------------------------------------------------
-// Follow-up Suggestion Chips
-// ---------------------------------------------------------------------------
 const SUGGESTIONS = [
-  "What is my portfolio's Sharpe ratio?",
-  "How is tech sector performing this quarter?",
-  "Recommend risk hedging strategies",
-  "Compare my allocation to the optimal one",
+  "Analyse the risk of investing in HDFC Bank right now",
+  "How is Nifty 50 performing this week?",
+  "Recommend risk hedging strategies for my portfolio",
+  "What is the outlook for IT sector stocks?",
   "What are the biggest risks in my portfolio?",
 ];
 
@@ -31,17 +29,19 @@ export default function ChatPage() {
     setIsStreaming,
     clearMessages,
   } = useChatStore();
+
   const [input, setInput] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-scroll to bottom on new messages
+  // STABLE session ID — persists across all messages in this tab
+  const sessionId = useRef<string>(crypto.randomUUID());
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Auto-resize textarea
   useEffect(() => {
     if (inputRef.current) {
       inputRef.current.style.height = "auto";
@@ -49,59 +49,46 @@ export default function ChatPage() {
     }
   }, [input]);
 
-  // Real API call to backend
   const sendQuery = useCallback(
     async (queryText: string) => {
       setIsStreaming(true);
-
       const assistantMessageId = crypto.randomUUID();
-      const assistantMessage = {
+      addMessage({
         id: assistantMessageId,
         role: "assistant" as const,
-        content: "...", // Initial thought state
+        content: "...",
         timestamp: new Date().toISOString(),
-      };
-
-      addMessage(assistantMessage);
+        agents: [],
+        confidence: 0,
+        metadata: {},
+        sources: [],
+      });
 
       try {
-        const sessionUserId = "anonymous";
-        const sessionId = crypto.randomUUID();
-
-        const response = await fetch("http://localhost:8000/api/v1/query", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            query: queryText,
-            user_id: sessionUserId,
-            session_id: sessionId,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`API error: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json();
+        const data = await apiClient.query(
+          queryText,
+          "anonymous",
+          sessionId.current  // stable — AI remembers context
+        );
 
         const content =
-          data.answer ??
           data.response ??
+          data.answer ??
           data.message ??
+          data.final_response ??
           "No response received.";
+
         const confidence =
           typeof data.confidence === "number" ? data.confidence : 0;
+
         const agentList = Array.isArray(data.agents_used)
           ? data.agents_used
           : data.agent_type
             ? [data.agent_type]
-            : [];
-        const metadata = data.metadata ?? data.data ?? {};
+            : ["financial_analyst"];
+
         const sourceList = Array.isArray(data.sources) ? data.sources : [];
 
-        // Update the message with the full response and metadata
         useChatStore.setState((state) => ({
           messages: state.messages.map((m) =>
             m.id === assistantMessageId
@@ -110,9 +97,9 @@ export default function ChatPage() {
                   content,
                   agents: agentList,
                   confidence,
-                  metadata,
+                  metadata: data.metadata ?? {},
                   sources: sourceList.map((s: string) => ({
-                    title: s.charAt(0).toUpperCase() + s.slice(1).replace("_", " "),
+                    title: s.charAt(0).toUpperCase() + s.slice(1).replace(/_/g, " "),
                     url: "#",
                     snippet: `Information retrieved via ${s}.`,
                   })),
@@ -124,7 +111,10 @@ export default function ChatPage() {
         useChatStore.setState((state) => ({
           messages: state.messages.map((m) =>
             m.id === assistantMessageId
-              ? { ...m, content: `Error: ${error.message}. Please ensure the backend is running.` }
+              ? {
+                  ...m,
+                  content: `Error: ${error.message}. Please ensure the backend is running on port 8000.`,
+                }
               : m
           ),
         }));
@@ -138,15 +128,16 @@ export default function ChatPage() {
   const handleSend = useCallback(() => {
     const trimmedInput = input.trim();
     if (!trimmedInput || isStreaming) return;
-
-    const userMessage = {
+    addMessage({
       id: crypto.randomUUID(),
       role: "user" as const,
       content: trimmedInput,
       timestamp: new Date().toISOString(),
-    };
-
-    addMessage(userMessage);
+      agents: [],
+      confidence: 0,
+      metadata: {},
+      sources: [],
+    });
     setInput("");
     sendQuery(trimmedInput);
   }, [input, isStreaming, addMessage, sendQuery]);
@@ -157,18 +148,21 @@ export default function ChatPage() {
     setTimeout(() => setCopiedId(null), 2000);
   }, []);
 
+  // Reset session on New Chat
+  const handleNewChat = useCallback(() => {
+    clearMessages();
+    sessionId.current = crypto.randomUUID();
+  }, [clearMessages]);
+
   return (
     <div className="flex h-screen flex-col">
-      {/* Chat Header */}
       <div className="flex items-center justify-between border-b border-surface-50 bg-surface-200 px-6 py-3">
         <div className="flex items-center gap-3">
           <div className="rounded-lg bg-accent-blue bg-opacity-10 p-2">
             <Bot className="h-5 w-5 text-accent-blue" />
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-white">
-              AI Financial Brain
-            </h1>
+            <h1 className="text-sm font-semibold text-white">AI Financial Brain</h1>
             <p className="text-xs text-gray-400">
               {isStreaming ? (
                 <span className="flex items-center gap-1">
@@ -182,7 +176,7 @@ export default function ChatPage() {
           </div>
         </div>
         <button
-          onClick={clearMessages}
+          onClick={handleNewChat}
           className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-gray-400 transition-colors hover:bg-surface-100 hover:text-gray-200"
         >
           <RotateCcw className="h-3.5 w-3.5" />
@@ -190,7 +184,6 @@ export default function ChatPage() {
         </button>
       </div>
 
-      {/* Messages Area */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center text-center">
@@ -201,7 +194,7 @@ export default function ChatPage() {
               Ask me anything about your finances
             </h2>
             <p className="mb-8 max-w-md text-sm text-gray-400">
-              I can analyze your portfolio, provide market insights, assess risk,
+              I can analyse your portfolio, provide market insights, assess risk,
               and help with financial planning decisions.
             </p>
             <div className="flex flex-wrap justify-center gap-2 max-w-lg">
@@ -236,7 +229,6 @@ export default function ChatPage() {
         )}
       </div>
 
-      {/* Input Area */}
       <div className="border-t border-surface-50 bg-surface-200 px-6 py-4">
         <div className="mx-auto max-w-3xl">
           <div className="relative rounded-xl border border-surface-50 bg-surface-300 transition-colors focus-within:border-accent-blue">
@@ -255,16 +247,10 @@ export default function ChatPage() {
               className="w-full resize-none rounded-xl bg-transparent px-4 py-3 pr-24 text-sm text-gray-200 placeholder-gray-500 focus:outline-none"
             />
             <div className="absolute right-2 bottom-2 flex items-center gap-1">
-              <button
-                className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-surface-50 hover:text-gray-300"
-                title="Attach file"
-              >
+              <button className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-surface-50 hover:text-gray-300" title="Attach file">
                 <Paperclip className="h-4 w-4" />
               </button>
-              <button
-                className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-surface-50 hover:text-gray-300"
-                title="Voice input"
-              >
+              <button className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-surface-50 hover:text-gray-300" title="Voice input">
                 <Mic className="h-4 w-4" />
               </button>
               <button
@@ -277,8 +263,7 @@ export default function ChatPage() {
             </div>
           </div>
           <p className="mt-2 text-center text-xs text-gray-600">
-            AI Financial Brain may make mistakes. Verify important financial
-            decisions with a qualified advisor.
+            AI Financial Brain may make mistakes. Verify important financial decisions with a qualified advisor.
           </p>
         </div>
       </div>

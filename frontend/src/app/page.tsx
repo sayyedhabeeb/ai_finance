@@ -99,7 +99,7 @@ function MiniSparkline({ trend }: { trend: "up" | "down" | "flat" }) {
 // ---------------------------------------------------------------------------
 // Recent Activity Item
 // ---------------------------------------------------------------------------
-interface ActivityItem {
+interface RecentActivityItem {
   id: string;
   type: "query" | "alert" | "trade" | "insight";
   title: string;
@@ -107,7 +107,15 @@ interface ActivityItem {
   time: string;
 }
 
-function ActivityItem({ item }: { item: ActivityItem }) {
+interface DashboardSummary {
+  totalValue: number;
+  dailyPnL: number;
+  dailyPnLPercent: number;
+  riskScore: number;
+  riskLevel: string;
+}
+
+function ActivityItem({ item }: { item: RecentActivityItem }) {
   const iconMap = {
     query: <Brain className="h-4 w-4 text-accent-blue" />,
     alert: <Shield className="h-4 w-4 text-accent-yellow" />,
@@ -156,19 +164,32 @@ export default function DashboardPage() {
       role: "user",
       content: queryInput,
       timestamp: new Date().toISOString(),
+      agents: [],
+      confidence: 0,
+      metadata: {},
+      sources: [],
     });
     setQueryInput("");
   }, [queryInput, addMessage]);
 
-  const summary = portfolioData ?? {
-    totalValue: 2845921.45,
-    dailyPnL: 12543.23,
-    dailyPnLPercent: 0.44,
-    riskScore: 72,
-    riskLevel: "Moderate",
-  };
+  const summary: DashboardSummary = portfolioData
+    ? {
+        totalValue: portfolioData.total_value,
+        dailyPnL: portfolioData.daily_change ?? 0,
+        dailyPnLPercent: 0,
+        riskScore: 72,
+        riskLevel: "Moderate",
+      }
+    : {
+        totalValue: 2845921.45,
+        dailyPnL: 12543.23,
+        dailyPnLPercent: 0.44,
+        riskScore: 72,
+        riskLevel: "Moderate",
+      };
 
-  const activities: ActivityItem[] = recentActivity ?? [
+  const activities: RecentActivityItem[] =
+    (recentActivity as RecentActivityItem[] | undefined) ?? [
     {
       id: "1",
       type: "insight",

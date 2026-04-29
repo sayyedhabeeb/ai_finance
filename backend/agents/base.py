@@ -22,19 +22,21 @@ import re
 import time
 import traceback
 from datetime import datetime
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import structlog
-from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_community.chat_models import ChatOpenAI
-from langchain_groq import ChatGroq
 from tenacity import (
     retry,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+else:
+    BaseChatModel = Any  # type: ignore[assignment,misc]
 
 from backend.config.settings import get_settings
 from backend.config.schemas import (
@@ -195,6 +197,8 @@ class BaseAgent(abc.ABC):
                 f"Unsupported LLM_PROVIDER='{self._provider}'. "
                 "This project is configured for Groq only. Set LLM_PROVIDER=groq."
             )
+
+        from langchain_groq import ChatGroq
 
         return ChatGroq(
             groq_api_key=self._groq_api_key,

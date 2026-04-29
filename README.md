@@ -109,11 +109,10 @@ docker compose -f deployments/docker/docker-compose.yml up -d
 
 ### 4. Running Backend Locally
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
+python -m venv backend/venv
+source backend/venv/bin/activate  # Windows: backend\venv\Scripts\activate
+pip install -e ".[dev]"
+uvicorn backend.api.app:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### 5. Running Frontend Locally

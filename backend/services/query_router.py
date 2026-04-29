@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
-from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+else:
+    BaseChatModel = Any  # type: ignore[assignment,misc]
 
 from backend.config.schemas import QueryType
 

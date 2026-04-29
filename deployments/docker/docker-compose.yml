@@ -38,6 +38,8 @@ services:
       dockerfile: deployments/docker/Dockerfile
     container_name: aifb-backend
     restart: unless-stopped
+    env_file:
+      - .env
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     environment:
@@ -81,6 +83,7 @@ services:
     restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_PORT_FALLBACK:-3002}:3000"
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
@@ -183,7 +186,7 @@ services:
   # Weaviate - Vector Database
   # =========================================================================
   weaviate:
-    image: semitechnologies/weaviate:1.25.0
+    image: semitechnologies/weaviate:1.27.0
     container_name: aifb-weaviate
     restart: unless-stopped
     ports:

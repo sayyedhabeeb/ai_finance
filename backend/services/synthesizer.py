@@ -1,11 +1,15 @@
 """Response Synthesizer — produces the final unified answer from agent outputs."""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
-from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+else:
+    BaseChatModel = Any  # type: ignore[assignment,misc]
 
 logger = structlog.get_logger(__name__)
 

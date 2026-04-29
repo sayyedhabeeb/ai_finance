@@ -11,10 +11,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, confloat
 from starlette.concurrency import run_in_threadpool
 
+from backend.app.api.deps import get_current_user
 from backend.config.schemas import AgentTask, AgentType
 from backend.services.orchestrator import Orchestrator
 
@@ -22,7 +23,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
 legacy_router = APIRouter(tags=["legacy"])
-_orchestrator = Orchestrator.from_settings()
+_orchestrator: Optional[Orchestrator] = None
+
+
+def _get_orchestrator() -> Orchestrator:
+    """Lazily initialize the orchestrator on first query request."""
+    global _orchestrator  # noqa: PLW0603
+    if _orchestrator is None:
+        _orchestrator = Orchestrator.from_settings()
+    return _orchestrator
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +75,50 @@ class QueryResponse(BaseModel):
     confidence: Optional[float] = None
     sources: Optional[List[str]] = None
     agent_type: Optional[str] = None
+
+
+class LegacyChatRequest(BaseModel):
+    """Inbound payload for legacy /chat endpoints."""
+    message: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=10_000,
+        description="Preferred frontend field for user input",
+    )
+    query: Optional[str] = Field(
+        None,
+        min_length=1,
+        max_length=10_000,
+        description="Alias field for user input",
+    )
+    user_id: Optional[str] = Field(
+        "anonymous",
+        min_length=1,
+        max_length=128,
+        description="Optional user identifier",
+    )
+    conversation_id: Optional[str] = Field(
+        None,
+        description="Optional conversation/session identifier",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "message": "Analyze my portfolio risk and suggest rebalancing.",
+                "user_id": "user_123",
+                "conversation_id": "sess_abc123",
+            }
+        }
+
+
+class OrchestrationResponse(BaseModel):
+    """Normalized response payload for query/chat endpoints."""
+    answer: Optional[str] = None
+    agents_used: List[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    sources: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class StreamChunk(BaseModel):
@@ -300,19 +353,26 @@ async def _dispatch_to_agent(query_text: str, query_id: str, redis_client, reque
 
 @router.post(
     "/query",
+    response_model=OrchestrationResponse,
     status_code=status.HTTP_200_OK,
     summary="Submit a query to the AI Financial Brain",
 )
 async def post_query(
     body: QueryRequest,
     request: Request,
+    user: dict = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    body.user_id = user["user_id"]
     user_query = body.query
-    logger.info("orchestration_layer.routing_query query=%s", user_query[:120])
-    
+    logger.info("orchestration_layer.routing_query user_id=%s query=%s", body.user_id, user_query[:120])
+
     # Process through the full LangGraph orchestration layer
-    result = await _orchestrator.process_query(user_query)
-    
+    result = await _get_orchestrator().process_query(
+        user_query,
+        user_id=body.user_id,
+        session_id=body.session_id or "",
+    )
+
     # Map into the requested structured output format
     return {
         "answer": result.get("response"),
@@ -322,24 +382,29 @@ async def post_query(
         "metadata": {
             "query_type": result.get("query_type"),
             "execution_time_sec": round(result.get("execution_time", 0.0), 3),
-        }
+        },
     }
 @legacy_router.post(
     "/chat",
+    response_model=OrchestrationResponse,
     status_code=status.HTTP_200_OK,
     summary="Frontend alias for submitting a query",
 )
 async def post_chat(
-    body: Dict[str, Any],
+    body: LegacyChatRequest,
     request: Request,
 ) -> Dict[str, Any]:
     """Alias for /query to support legacy/current frontend code."""
-    query_text = body.get("message") or body.get("query")
+    query_text = body.message or body.query
     if not query_text:
         raise HTTPException(status_code=400, detail="Message or query is required")
     
     # Extract query and pass to same orchestration logic
-    result = await _orchestrator.process_query(query_text)
+    result = await _get_orchestrator().process_query(
+        query_text,
+        user_id=body.user_id or "anonymous",
+        session_id=body.conversation_id or "",
+    )
     
     return {
         "answer": result.get("response"),
@@ -359,18 +424,20 @@ async def post_chat(
     summary="Frontend alias for streaming query",
 )
 async def post_chat_stream(
-    body: Dict[str, Any],
+    body: LegacyChatRequest,
     request: Request,
 ) -> StreamChunk:
     """Alias for /query/stream."""
     # Convert simple chat body to UserQuery-like schema
-    query_text = body.get("message") or body.get("query")
-    user_id = body.get("user_id", "anonymous")
+    query_text = body.message or body.query
+    if not query_text:
+        raise HTTPException(status_code=400, detail="Message or query is required")
+    user_id = body.user_id or "anonymous"
     
     internal_body = UserQuery(
         user_id=user_id,
         query=query_text,
-        session_id=body.get("conversation_id")
+        session_id=body.conversation_id,
     )
     return await post_query_stream(internal_body, request)
 

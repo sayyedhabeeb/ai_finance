@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import weaviate
 from weaviate.classes.config import Configure, DataType, Property, VectorDistances
@@ -95,11 +96,15 @@ class MarketWeaviateClient:
                     headers=headers,
                 )
             else:
+                parsed = urlparse(self._url) if self._url else None
+                host = parsed.hostname if parsed and parsed.hostname else "localhost"
+                port = parsed.port if parsed and parsed.port else 8080
                 self._client = weaviate.connect_to_local(
-                    host="localhost",
-                    port=8080,
+                    host=host,
+                    port=port,
                     grpc_port=50051,
                     headers=headers,
+                    skip_init_checks=True,
                 )
 
             self._client.connect()

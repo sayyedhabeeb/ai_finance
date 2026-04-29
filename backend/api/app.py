@@ -9,6 +9,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
+from urllib.parse import urlparse
 
 import prometheus_client
 from fastapi import FastAPI, Request, Response
@@ -151,11 +152,27 @@ async def lifespan(app: FastAPI):
 
     try:
         import weaviate
-        app.state.weaviate = weaviate.Client(settings.weaviate_url)
+        parsed = urlparse(settings.weaviate_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 8080
+
+        # Prefer v4 connect API; allow startup even if gRPC checks are blocked.
+        if hasattr(weaviate, "connect_to_local"):
+            app.state.weaviate = weaviate.connect_to_local(
+                host=host,
+                port=port,
+                grpc_port=50051,
+                skip_init_checks=True,
+            )
+        elif hasattr(weaviate, "Client"):
+            app.state.weaviate = weaviate.Client(settings.weaviate_url)
+        else:
+            raise RuntimeError("Unsupported weaviate-client version")
+
         app.state.weaviate.is_ready()
         logger.info("Weaviate connection established")
-    except Exception:
-        logger.warning("Weaviate not available — vector search disabled")
+    except Exception as exc:
+        logger.warning("Weaviate not available - vector search disabled (%s)", exc)
         app.state.weaviate = None
 
     # Warm Prometheus metrics registry
@@ -173,10 +190,17 @@ async def lifespan(app: FastAPI):
         logger.info("PostgreSQL connection pool closed")
 
     if hasattr(app.state, "redis") and app.state.redis is not None:
-        await app.state.redis.close()
+        if hasattr(app.state.redis, "aclose"):
+            await app.state.redis.aclose()
+        else:
+            await app.state.redis.close()
         logger.info("Redis connection closed")
 
-    # Weaviate client has no explicit close in v3
+    if hasattr(app.state, "weaviate") and app.state.weaviate is not None:
+        close_fn = getattr(app.state.weaviate, "close", None)
+        if callable(close_fn):
+            close_fn()
+            logger.info("Weaviate connection closed")
 
     logger.info("AI Financial Brain API stopped")
 

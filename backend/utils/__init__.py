@@ -31,7 +31,7 @@ A multi-agent, dual-RAG, ML-powered financial intelligence system.
 
 5. Run the server:
    ```bash
-   python main.py
+   uvicorn backend.api.app:app --host 0.0.0.0 --port 8000 --reload
    ```
 
 ## Architecture

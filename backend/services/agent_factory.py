@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import importlib
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
-from langchain_core.language_models import BaseChatModel
-from langchain_community.chat_models import ChatOpenAI
-from langchain_groq import ChatGroq
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+else:
+    BaseChatModel = Any  # type: ignore[assignment,misc]
 
 from backend.agents.base import BaseAgent
 from backend.config.schemas import AgentType
@@ -135,6 +137,8 @@ def _build_llm_from_settings(settings: Any) -> BaseChatModel | None:
     provider = str(settings.llm_provider).lower().strip()
 
     if provider == "groq":
+        from langchain_groq import ChatGroq
+
         return ChatGroq(
             groq_api_key=settings.groq_api_key,
             model_name=settings.groq_model,

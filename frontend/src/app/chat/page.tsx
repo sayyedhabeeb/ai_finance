@@ -21,6 +21,63 @@ const SUGGESTIONS = [
   "What are the biggest risks in my portfolio?",
 ];
 
+function sanitizeAssistantContent(raw: string): string {
+  if (!raw) return raw;
+
+  const normalized = raw.replace(/\r\n/g, "\n");
+  const lower = normalized.toLowerCase();
+  const reportLike = /(executive summary|detailed analysis|confidence level|sources used|key takeaways|suggested follow-up)/i.test(
+    normalized
+  );
+
+  const lines = normalized
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+
+      if (/^#{1,6}\s*(executive summary|detailed analysis|confidence|sources|key takeaways|suggested follow-up)/i.test(trimmed)) {
+        return false;
+      }
+      if (/^(executive summary|detailed analysis|confidence level|sources used|key takeaways|suggested follow-up questions)\s*:/i.test(trimmed)) {
+        return false;
+      }
+      if (/^agents?\s*:/i.test(trimmed)) {
+        return false;
+      }
+      if (/^-+\s*\*\*(query_type|model|confidence|sources?)\*\*:/i.test(trimmed)) {
+        return false;
+      }
+      if (/^confidence\s*:/i.test(trimmed)) {
+        return false;
+      }
+      if (/^sources?\s*:/i.test(trimmed)) {
+        return false;
+      }
+      return true;
+    });
+
+  const cleaned = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+
+  if (!cleaned) {
+    return "I'm here to help. Please ask your question again.";
+  }
+
+  if (reportLike) {
+    const firstParagraph = cleaned.split(/\n{2,}/).find((p) => p.trim().length > 0);
+    if (firstParagraph && firstParagraph.trim().length > 0) {
+      return firstParagraph.trim();
+    }
+  }
+
+  // If provider is unavailable, keep a short user-friendly sentence only.
+  if (/temporarily unavailable|invalid api key|failed to connect/i.test(lower)) {
+    return "I can help with that, but I'm temporarily unable to generate a full answer right now. Please try again in a moment.";
+  }
+
+  return cleaned;
+}
+
 export default function ChatPage() {
   const {
     messages,
@@ -71,23 +128,17 @@ export default function ChatPage() {
           sessionId.current  // stable — AI remembers context
         );
 
-        const content =
+        const contentRaw =
           data.response ??
           data.answer ??
           data.message ??
           data.final_response ??
           "No response received.";
+        const content = sanitizeAssistantContent(String(contentRaw));
 
-        const confidence =
-          typeof data.confidence === "number" ? data.confidence : 0;
-
-        const agentList = Array.isArray(data.agents_used)
-          ? data.agents_used
-          : data.agent_type
-            ? [data.agent_type]
-            : ["financial_analyst"];
-
-        const sourceList = Array.isArray(data.sources) ? data.sources : [];
+        const confidence = 0;
+        const agentList: string[] = [];
+        const sourceList: string[] = [];
 
         useChatStore.setState((state) => ({
           messages: state.messages.map((m) =>

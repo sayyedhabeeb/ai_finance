@@ -258,6 +258,7 @@ def classify_query_node(state: GraphState) -> dict[str, Any]:
     """Node 1 — classify the user query and extract entities."""
     deps = _get_deps()
     query = state["user_query"]
+    query_lower = query.lower()
     t0 = time.perf_counter()
 
     logger.info("node.classify_query.start", query=query[:120])
@@ -265,6 +266,17 @@ def classify_query_node(state: GraphState) -> dict[str, Any]:
     try:
         query_type = deps.query_router.classify_query(query)
         entities = deps.query_router.extract_entities(query)
+        if len(query_lower.split()) <= 3 or query_lower in ["hi", "hello", "hey"]:
+            execution_mode = "simple"
+        elif query_type.value == "general":
+            execution_mode = "simple"
+        elif query_type.value in ["investment", "finance"]:
+            if "portfolio" in query_lower or "strategy" in query_lower:
+                execution_mode = "full"
+            else:
+                execution_mode = "agent"
+        else:
+            execution_mode = "agent"
         elapsed = time.perf_counter() - t0
 
         logger.info(
@@ -280,6 +292,7 @@ def classify_query_node(state: GraphState) -> dict[str, Any]:
 
         return {
             "query_type": query_type.value,
+            "execution_mode": execution_mode,
             "metadata": meta,
             "error": None,
         }
@@ -287,6 +300,7 @@ def classify_query_node(state: GraphState) -> dict[str, Any]:
         logger.error("node.classify_query.error", error=str(exc))
         return {
             "query_type": "general",
+            "execution_mode": "simple",
             "error": f"classify_query_node: {exc}",
         }
 
@@ -298,6 +312,7 @@ def activate_agents_node(state: GraphState) -> dict[str, Any]:
     """Node 2 — determine which agents to run and in what order."""
     deps = _get_deps()
     query_type_str = state.get("query_type", "general")
+    mode = state.get("execution_mode", "agent")
     query = state["user_query"]
     t0 = time.perf_counter()
 
@@ -308,16 +323,34 @@ def activate_agents_node(state: GraphState) -> dict[str, Any]:
     except ValueError:
         query_type = QueryType.GENERAL
 
-    sequential, parallel_groups = deps.query_router.determine_active_agents(
+    routed_sequential, routed_parallel_groups = deps.query_router.determine_active_agents(
         query_type, query
     )
-    elapsed = time.perf_counter() - t0
+    if mode == "full":
+        active = _ALL_AGENT_NAMES
+    elif mode == "agent":
+        if state.get("query_type") == "investment":
+            active = ["market_analyst", "risk_analyst"]
+        elif state.get("query_type") == "news":
+            active = ["news_sentiment"]
+        else:
+            active = ["personal_cfo"]
+    elif mode == "simple":
+        active = []
+    else:
+        active = []
 
-    # Build flat active_agents list (parallel first, then sequential)
-    active: list[str] = []
-    for group in parallel_groups:
-        active.extend(group)
-    active.extend(sequential)
+    if mode == "full":
+        parallel_groups = []
+        sequential = list(_ALL_AGENT_NAMES)
+    else:
+        parallel_groups = [
+            [name for name in group if name in active]
+            for group in routed_parallel_groups
+        ]
+        parallel_groups = [group for group in parallel_groups if group]
+        sequential = [name for name in routed_sequential if name in active]
+    elapsed = time.perf_counter() - t0
 
     logger.info(
         "node.activate_agents.done",
@@ -569,32 +602,120 @@ def synthesize_response_node(state: GraphState) -> dict[str, Any]:
     """Node 7 — produce the final natural-language response."""
     deps = _get_deps()
     query = state["user_query"]
+    mode = state.get("execution_mode", "agent")
     agent_results = state.get("agent_results", {})
     t0 = time.perf_counter()
 
     logger.info("node.synthesize_response.start")
 
-    try:
-        context: dict[str, Any] = {
-            "query_type": state.get("query_type", "general"),
-            "user_id": state.get("user_id", ""),
-            "revision_count": state.get("revision_count", 0),
-            "confidence": state.get("confidence", 0.0),
-        }
-        if state.get("critic_result"):
-            critic_result = state["critic_result"]
-            feedback = critic_result.get("recommendations", [])
-            if not feedback:
-                feedback = critic_result.get("data", {}).get("feedback", [])
-            context["critic_feedback"] = "; ".join(feedback)
+    def clean_response(text: str) -> str:
+        banned_phrases = [
+            "Executive Summary",
+            "Detailed Analysis",
+            "Confidence Level",
+            "Sources Used",
+            "Key Takeaways",
+            "Suggested Follow-up",
+            "Agents:",
+            "Confidence:",
+            "Sources:",
+            "Agent:",
+        ]
+        cleaned = text
+        for phrase in banned_phrases:
+            cleaned = cleaned.replace(phrase, "")
+        return cleaned.strip()
 
-        final_response = deps.synthesizer.synthesize(query, agent_results, context)
-        elapsed = time.perf_counter() - t0
+    def fallback_human_response(query_text: str, summaries: list[str]) -> str:
+        usable = [
+            clean_response(str(s))
+            for s in summaries
+            if s and not _is_llm_unavailable_response(str(s))
+        ]
+        usable = [s for s in usable if s]
+        if usable:
+            return " ".join(usable)
 
-        # Generate follow-up suggestions
-        follow_ups = deps.synthesizer.generate_follow_up_suggestions(
-            query, final_response, context.get("query_type", "general")
+        query_lower = query_text.strip().lower()
+        if query_lower in {"hi", "hello", "hey"}:
+            return "Hi! How can I help you today?"
+        return (
+            "I can help with that, but I'm temporarily unable to generate a full answer right now. "
+            "Please try again in a moment."
         )
+
+    llm = getattr(deps.synthesizer, "llm", None) or getattr(
+        deps.synthesizer, "_llm", None
+    )
+
+    try:
+        if mode == "simple":
+            if llm is not None:
+                try:
+                    response = llm.invoke(
+                        f"Respond naturally and briefly to this user message:\n\n{query}"
+                    )
+                    response_text = getattr(response, "content", response)
+                except Exception:
+                    response_text = fallback_human_response(query, [])
+            else:
+                response_text = fallback_human_response(query, [])
+
+            return {
+                "final_response": clean_response(str(response_text)),
+                "confidence": 0.9,
+                "metadata": state.get("metadata", {}),
+                "error": None,
+            }
+
+        clean_data: list[str] = []
+        for _, result in agent_results.items():
+            if isinstance(result, dict) and result.get("success"):
+                summary = str(result.get("summary", ""))
+                if summary and not _is_llm_unavailable_response(summary):
+                    clean_data.append(summary)
+        agent_summaries = "\n".join(item for item in clean_data if item).strip()
+        if not agent_summaries:
+            agent_summaries = "No additional insights were provided."
+
+        prompt = f"""You are a professional AI assistant.
+
+Your job is to generate a clean, natural, human-like response.
+
+STRICT RULES (MANDATORY):
+- NEVER include headings like "Executive Summary", "Detailed Analysis", "Conclusion"
+- NEVER include "Confidence", "Sources", or "Agent"
+- NEVER mention internal systems, tools, or roles
+- NEVER expose structured sections or labels
+- NEVER output bullet-point reports unless explicitly needed
+
+RESPONSE STYLE:
+- Speak like a human expert
+- Be clear, direct, and conversational
+- Avoid robotic or report-style formatting
+- Keep answers concise unless depth is required
+- Only include structure if it feels natural (not forced headings)
+
+INPUT:
+User Query:
+{query}
+
+Insights:
+{agent_summaries}
+
+OUTPUT:
+Write a natural, clean answer as if you are directly helping the user."""
+
+        if llm is not None:
+            try:
+                llm_response = llm.invoke(prompt)
+                final_response = getattr(llm_response, "content", llm_response)
+                final_response = clean_response(str(final_response))
+            except Exception:
+                final_response = fallback_human_response(query, clean_data)
+        else:
+            final_response = fallback_human_response(query, clean_data)
+        elapsed = time.perf_counter() - t0
 
         meta = dict(state.get("metadata", {}))
         meta["synthesis_time"] = elapsed
@@ -612,6 +733,7 @@ def synthesize_response_node(state: GraphState) -> dict[str, Any]:
 
         return {
             "final_response": final_response,
+            "confidence": state.get("confidence", 0.8),
             "metadata": meta,
             "error": None,
         }
@@ -637,6 +759,13 @@ def _should_run_critic(state: GraphState) -> str:
     """
     # Disabled: Groq free-tier 429 fix (re-enable after upgrade)
     return "synthesize_response"
+
+
+def route_after_classification(state: GraphState) -> str:
+    if state.get("execution_mode") == "simple":
+        return "synthesize_response"
+    return "activate_agents"
+
 
 def _route_by_critique(state: GraphState) -> str:
     """Conditional edge from ``critic_node``.
@@ -701,7 +830,14 @@ def build_orchestration_graph() -> CompiledGraph:
     graph.set_entry_point("classify_query")
 
     # ── Fixed edges ─────────────────────────────────────────────
-    graph.add_edge("classify_query", "activate_agents")
+    graph.add_conditional_edges(
+        "classify_query",
+        route_after_classification,
+        {
+            "synthesize_response": "synthesize_response",
+            "activate_agents": "activate_agents",
+        },
+    )
     graph.add_edge("activate_agents", "execute_agents")
     graph.add_edge("execute_agents", "aggregate_results")
 

@@ -72,6 +72,7 @@ class GraphState(TypedDict, total=False):
 
     # ── Classification & Routing ─────────────────────────────
     query_type: str
+    execution_mode: str
     active_agents: list[str]
     sequential_agents: list[str]
     parallel_groups: list[list[str]]
